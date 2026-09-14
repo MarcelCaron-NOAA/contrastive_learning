@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs / batch output
+*.out
+*.err
+*.log
+slurm-*.out
+
+# Temporary / editor files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Local data / scratch directories, if ever created here
+data/
+scratch/
+logs/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

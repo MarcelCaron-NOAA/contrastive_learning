@@ -1,0 +1,8 @@
+Python: 3.11.16 (main, Sep  2 2026, 23:39:52) [GCC 15.3.0]
+NumPy: 2.4.6
+Pandas: 3.0.5
+xarray: 2026.7.0
+scikit-learn: 1.9.1
+PyTorch: 2.11.0+cu128
+PyTorch CUDA build: 12.8
+CUDA available on current node: False
