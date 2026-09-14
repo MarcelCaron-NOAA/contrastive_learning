@@ -23,7 +23,7 @@ Large data, logs, and scratch files are kept under:
 with subdirectories:
 - `data/`
 - `logs/`
-cat > README.md <<'EOF'
+
 # Contrastive Learning for Spatial Forecast Verification
 
 Research project investigating learned representations of meteorological
@@ -47,9 +47,9 @@ source load_env.sh
 Large data, logs, and scratch files are kept under:
 `/scratch4/NCEPDEV/stmp/Marcel.Caron/mach_learn/contrastive_learning`
 with subdirectories:
-- data/
-- logs/
-- scratch/
+- `data/`
+- `logs/`
+- `scratch/`
 
 ## Project structure
 - `configs/` - experiment and model configuration files
