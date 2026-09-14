@@ -21,8 +21,8 @@ source load_env.sh
 Large data, logs, and scratch files are kept under:
 `/scratch4/NCEPDEV/stmp/Marcel.Caron/mach_learn/contrastive_learning`
 with subdirectories:
-- data/
-- logs/
+- `data/`
+- `logs/`
 cat > README.md <<'EOF'
 # Contrastive Learning for Spatial Forecast Verification
 
