@@ -26,8 +26,6 @@ export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 # Make project modules importable
 export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH:-}"
 
-cd "${PROJECT_DIR}"
-
 echo "============================================================"
 echo " Contrastive Learning Project Environment"
 echo "============================================================"

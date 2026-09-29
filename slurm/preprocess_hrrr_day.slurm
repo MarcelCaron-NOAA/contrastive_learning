@@ -5,8 +5,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=02:00:00
+#SBATCH --mem=4G
+#SBATCH --time=01:30:00
 #SBATCH --output=/scratch4/NCEPDEV/stmp/Marcel.Caron/mach_learn/contrastive_learning/logs/hrrr_qpf6_%A_%a.out
 #SBATCH --error=/scratch4/NCEPDEV/stmp/Marcel.Caron/mach_learn/contrastive_learning/logs/hrrr_qpf6_%A_%a.err
 set -euo pipefail
@@ -14,8 +14,37 @@ PROJECT_DIR="/scratch4/NCEPDEV/ovp/Marcel.Caron/mach_learn/contrastive_learning"
 DATE_LIST="${1:?Usage: sbatch ... preprocess_hrrr_day.slurm DATE_LIST}"
 source "${PROJECT_DIR}/load_env.sh"
 export BLOSC_NTHREADS="${SLURM_CPUS_PER_TASK:-4}"
-DATE="$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "${DATE_LIST}")"
-[[ -n "${DATE}" ]] || { echo "No date for task ${SLURM_ARRAY_TASK_ID}" >&2; exit 2; }
-echo "DATE=${DATE} HOST=$(hostname) JOB=${SLURM_JOB_ID} TASK=${SLURM_ARRAY_TASK_ID}"
-python "${PROJECT_DIR}/scripts/preprocess_hrrr_day.py" --date "${DATE}"
+DAYS_PER_TASK="${DAYS_PER_TASK:-14}"
 
+START_LINE=$((SLURM_ARRAY_TASK_ID * DAYS_PER_TASK + 1))
+END_LINE=$((START_LINE + DAYS_PER_TASK - 1))
+
+mapfile -t DATES < <(
+    sed -n "${START_LINE},${END_LINE}p" "${DATE_LIST}"
+)
+
+if [[ "${#DATES[@]}" -eq 0 ]]; then
+    echo "No dates found for array task ${SLURM_ARRAY_TASK_ID}" >&2
+    exit 2
+fi
+
+echo "============================================================"
+echo "SLURM_JOB_ID        = ${SLURM_JOB_ID}"
+echo "SLURM_ARRAY_JOB_ID  = ${SLURM_ARRAY_JOB_ID:-}"
+echo "SLURM_ARRAY_TASK_ID = ${SLURM_ARRAY_TASK_ID}"
+echo "DATES               = ${DATES[*]}"
+echo "HOST                = $(hostname)"
+echo "============================================================"
+
+for DATE in "${DATES[@]}"; do
+    echo
+    echo "############################################################"
+    echo "Processing ${DATE}"
+    echo "############################################################"
+
+    python "${PROJECT_DIR}/scripts/preprocess_hrrr_day.py" \
+        --date "${DATE}"
+done
+
+echo
+echo "Completed all dates for array task ${SLURM_ARRAY_TASK_ID}"

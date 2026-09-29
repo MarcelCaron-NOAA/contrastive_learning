@@ -18,9 +18,11 @@ slurm-*.out
 *.swp
 *.swo
 *~
+*.bak
+*.bak_*
+*.bak*
 
 # Local data / scratch directories, if ever created here
-data/
 scratch/
 logs/
 
