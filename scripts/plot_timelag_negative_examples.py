@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Plot the three highest-similarity sampled negative examples.
+"""
+Plot the three highest- and three lowest-similarity sampled negative examples.
 
-Each figure has:
-    Control (C) | Negative (N) | N - C
+Each rank figure has:
 
-The experiment already samples N randomly from F12 fields at the same UTC
-valid hour and >90 days away from C, at the same geographic patch.
+    top row:    high-similarity A/C | N | N-A
+    bottom row: low-similarity  A/C | N | N-A
+
+This is useful for inspecting how hard the climo45 negative population became.
 """
 
 from __future__ import annotations
@@ -98,7 +100,11 @@ class HRRRPatchReader:
 def add_map_features(ax):
     ax.coastlines(resolution="50m", linewidth=0.7)
     ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.5)
-    ax.add_feature(cfeature.STATES.with_scale("50m"), linewidth=0.45, edgecolor="gray")
+    ax.add_feature(
+        cfeature.STATES.with_scale("50m"),
+        linewidth=0.45,
+        edgecolor="gray",
+    )
     ax.set_xticks([])
     ax.set_yticks([])
 
@@ -125,7 +131,7 @@ def annotate(ax, text):
         0.02, 0.02, text,
         transform=ax.transAxes,
         ha="left", va="bottom",
-        fontsize=9.5, fontweight="bold",
+        fontsize=9.3, fontweight="bold",
         bbox=dict(
             facecolor="white",
             edgecolor="black",
@@ -138,7 +144,11 @@ def annotate(ax, text):
 
 def field_time(row):
     if "valid_end" in row.index and pd.notna(row["valid_end"]):
-        return pd.to_datetime(row["valid_end"], utc=True)
+        v = row["valid_end"]
+        if isinstance(v, (int, float, np.integer, np.floating)):
+            return pd.to_datetime(v, unit="s", utc=True)
+        return pd.to_datetime(v, utc=True)
+
     if "init_time" in row.index and pd.notna(row["init_time"]):
         return pd.to_datetime(row["init_time"], utc=True) + pd.Timedelta(
             hours=int(row["forecast_hour"])
@@ -150,6 +160,12 @@ def field_label(row):
     if "init_time" in row.index and pd.notna(row["init_time"]):
         init = pd.to_datetime(row["init_time"], utc=True)
         return f"{init:%Y-%m-%d %HZ} F{int(row['forecast_hour']):02d}"
+
+    vt = field_time(row)
+    if vt is not None:
+        init = vt - pd.Timedelta(hours=int(row["forecast_hour"]))
+        return f"{init:%Y-%m-%d %HZ} F{int(row['forecast_hour']):02d}"
+
     return f"{int(row['init_hour']):02d}Z F{int(row['forecast_hour']):02d}"
 
 
@@ -158,6 +174,15 @@ def patch_size_from_meta(exp):
     if not paths:
         return 256
     return int(json.loads(paths[0].read_text()).get("patch_size", 256))
+
+
+def shared_diff_norm(arrays):
+    vals = np.concatenate(
+        [np.abs(np.asarray(x, dtype=np.float32)).ravel() for x in arrays]
+    )
+    vals = vals[np.isfinite(vals)]
+    vmax = 1.0 if len(vals) == 0 else max(1.0, float(np.quantile(vals, 0.98)))
+    return TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
 
 
 def main():
@@ -172,7 +197,7 @@ def main():
     mpl.rcParams.update(
         {
             "font.size": 11,
-            "axes.titlesize": 13,
+            "axes.titlesize": 12,
             "axes.titleweight": "bold",
             "figure.titlesize": 16,
         }
@@ -197,13 +222,30 @@ def main():
     if not shards:
         raise RuntimeError("No metrics shards found.")
 
-    metrics = pd.concat([pd.read_csv(x, low_memory=False) for x in shards], ignore_index=True)
+    metrics = pd.concat(
+        [pd.read_csv(x, low_memory=False) for x in shards],
+        ignore_index=True,
+    )
     fcol = f"fss_w{args.primary_window}"
 
-    cn = metrics.loc[metrics["relation"] == "CN"].dropna(subset=[fcol]).copy()
-    cn = cn.sort_values(fcol, ascending=False).reset_index(drop=True)
+    if fcol not in metrics.columns:
+        raise RuntimeError(f"{fcol} not found.")
 
-    if len(cn) < 3:
+    cn = metrics.loc[metrics["relation"] == "CN"].dropna(subset=[fcol]).copy()
+
+    # Rank primarily by FSS, then correlation so tied FSS=0 cases are stable.
+    high = (
+        cn.sort_values([fcol, "corr"], ascending=[False, False])
+        .head(3)
+        .reset_index(drop=True)
+    )
+    low = (
+        cn.sort_values([fcol, "corr"], ascending=[True, True])
+        .head(3)
+        .reset_index(drop=True)
+    )
+
+    if len(high) < 3 or len(low) < 3:
         raise RuntimeError("Fewer than three valid C-N rows were found.")
 
     manifest = load_manifest(manifest_path)
@@ -211,6 +253,10 @@ def main():
     mapping = np.load(mapping_path)
     lat_full = np.asarray(mapping["hrrr_lat"], dtype=np.float32)
     lon_full = np.asarray(mapping["hrrr_lon"], dtype=np.float32)
+
+    meta_paths = sorted((exp / "shards").glob("metrics_shard_*.json"))
+    meta = json.loads(meta_paths[0].read_text()) if meta_paths else {}
+    mode = meta.get("negative_mode", "negative")
 
     reader = HRRRPatchReader()
     out_dir = exp / "figures/case_examples/negative_ranked"
@@ -220,82 +266,106 @@ def main():
 
     try:
         for rank in range(3):
-            row = cn.iloc[rank]
-            y0 = int(row["patch_y"])
-            x0 = int(row["patch_x"])
+            case_rows = [high.iloc[rank], low.iloc[rank]]
+            case_data = []
 
-            c, cmeta = reader.patch(row["a_id"], y0, x0, patch_size, manifest)
-            n, nmeta = reader.patch(row["b_id"], y0, x0, patch_size, manifest)
-            diff = n - c
+            for row in case_rows:
+                y0 = int(row["patch_y"])
+                x0 = int(row["patch_x"])
+                c, cmeta = reader.patch(row["a_id"], y0, x0, patch_size, manifest)
+                n, nmeta = reader.patch(row["b_id"], y0, x0, patch_size, manifest)
+                diff = n - c
 
-            lat = lat_full[y0:y0 + patch_size, x0:x0 + patch_size]
-            lon = lon_full[y0:y0 + patch_size, x0:x0 + patch_size]
+                lat = lat_full[y0:y0 + patch_size, x0:x0 + patch_size]
+                lon = lon_full[y0:y0 + patch_size, x0:x0 + patch_size]
+                case_data.append((row, c, n, diff, cmeta, nmeta, lon, lat))
 
-            finite = np.abs(diff[np.isfinite(diff)])
-            vmax = 1.0 if finite.size == 0 else max(
-                1.0,
-                float(np.quantile(finite, 0.98)),
-            )
-            diff_norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
+            diff_norm = shared_diff_norm([x[3] for x in case_data])
 
             fig, axes = plt.subplots(
-                1, 3,
-                figsize=(15.5, 4.8),
+                2, 3,
+                figsize=(15.5, 9.0),
                 subplot_kw={"projection": ccrs.PlateCarree()},
                 constrained_layout=True,
             )
 
+            title_mode = "climo45" if mode == "climo45" else mode
             fig.suptitle(
-                "High-similarity random negative example",
+                f"{title_mode} negative-pair examples",
                 fontweight="bold",
                 fontsize=16,
             )
 
-            plot_patch(axes[0], lon, lat, c, "Control (C)", PRECIP_CMAP, PRECIP_NORM)
-            plot_patch(axes[1], lon, lat, n, "Negative (N)", PRECIP_CMAP, PRECIP_NORM)
-            plot_patch(axes[2], lon, lat, diff, "N − C", DIFF_CMAP, diff_norm)
+            for row_idx, data in enumerate(case_data):
+                row, c, n, diff, cmeta, nmeta, lon, lat = data
 
-            cvalid = field_time(cmeta)
-            nvalid = field_time(nmeta)
+                plot_patch(axes[row_idx, 0], lon, lat, c, "Anchor / Control (A)", PRECIP_CMAP, PRECIP_NORM)
+                plot_patch(axes[row_idx, 1], lon, lat, n, "Negative (N)", PRECIP_CMAP, PRECIP_NORM)
+                plot_patch(axes[row_idx, 2], lon, lat, diff, "N − A", DIFF_CMAP, diff_norm)
 
-            lines = []
-            if cvalid is not None:
-                lines.append(f"C valid: {cvalid:%Y-%m-%d %HZ}")
-            if nvalid is not None:
-                lines.append(f"N valid: {nvalid:%Y-%m-%d %HZ}")
-            lines.extend(
-                [
-                    f"C: {field_label(cmeta)}",
-                    f"N: {field_label(nmeta)}",
-                    f"FSS(C,N) = {float(row[fcol]):.3f}",
-                    f"Corr = {float(row['corr']):.3f}",
-                    f"MAD = {float(row['mean_abs_diff_mm']):.3f} mm",
-                ]
-            )
-            annotate(axes[2], "\n".join(lines))
+                cvalid = field_time(cmeta)
+                nvalid = field_time(nmeta)
+
+                descriptor = (
+                    "High negative similarity"
+                    if row_idx == 0
+                    else "Low negative similarity"
+                )
+
+                lines = [descriptor]
+                if cvalid is not None:
+                    lines.append(f"A valid: {cvalid:%Y-%m-%d %HZ}")
+                if nvalid is not None:
+                    lines.append(f"N valid: {nvalid:%Y-%m-%d %HZ}")
+
+                lines.extend(
+                    [
+                        f"A: {field_label(cmeta)}",
+                        f"N: {field_label(nmeta)}",
+                        f"FSS(A,N) = {float(row[fcol]):.3f}",
+                        f"Corr = {float(row['corr']):.3f}",
+                        f"MAD = {float(row['mean_abs_diff_mm']):.3f} mm",
+                    ]
+                )
+
+                if "negative_time_distance_days" in row.index and pd.notna(
+                    row["negative_time_distance_days"]
+                ):
+                    lines.append(
+                        f"|Δt| = {float(row['negative_time_distance_days']):.0f} d"
+                    )
+
+                if "negative_climo_distance_days" in row.index and pd.notna(
+                    row["negative_climo_distance_days"]
+                ):
+                    lines.append(
+                        f"climo Δ = {int(row['negative_climo_distance_days'])} d"
+                    )
+
+                annotate(axes[row_idx, 2], "\n".join(lines))
 
             cbar1 = fig.colorbar(
                 mpl.cm.ScalarMappable(norm=PRECIP_NORM, cmap=PRECIP_CMAP),
-                ax=axes[:2],
+                ax=axes[:, :2],
                 orientation="horizontal",
-                fraction=0.055,
-                pad=0.04,
-                aspect=40,
+                fraction=0.045,
+                pad=0.035,
+                aspect=45,
             )
             cbar1.set_label("6-h accumulated precipitation (mm)", fontweight="bold")
             cbar1.set_ticks(PRECIP_BOUNDS_MM[:-1])
 
             cbar2 = fig.colorbar(
                 mpl.cm.ScalarMappable(norm=diff_norm, cmap=DIFF_CMAP),
-                ax=axes[2],
+                ax=axes[:, 2],
                 orientation="horizontal",
-                fraction=0.055,
-                pad=0.04,
-                aspect=25,
+                fraction=0.045,
+                pad=0.035,
+                aspect=30,
             )
-            cbar2.set_label("N − C (mm)", fontweight="bold")
+            cbar2.set_label("N − A (mm)", fontweight="bold")
 
-            stem = f"negative_high_similarity_rank{rank+1:02d}"
+            stem = f"negative_similarity_rank{rank + 1:02d}"
             png = out_dir / f"{stem}.png"
             pdf = out_dir / f"{stem}.pdf"
             fig.savefig(png, dpi=220, bbox_inches="tight")
@@ -305,12 +375,12 @@ def main():
             selected.append(
                 {
                     "rank": rank + 1,
-                    "sample_id": row["sample_id"],
-                    "control_id": row["a_id"],
-                    "negative_id": row["b_id"],
-                    "fss_cn": row[fcol],
-                    "corr": row["corr"],
-                    "mean_abs_diff_mm": row["mean_abs_diff_mm"],
+                    "high_sample_id": high.iloc[rank]["sample_id"],
+                    "high_negative_id": high.iloc[rank]["b_id"],
+                    "high_fss": high.iloc[rank][fcol],
+                    "low_sample_id": low.iloc[rank]["sample_id"],
+                    "low_negative_id": low.iloc[rank]["b_id"],
+                    "low_fss": low.iloc[rank][fcol],
                 }
             )
 

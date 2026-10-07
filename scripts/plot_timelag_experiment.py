@@ -1,4 +1,24 @@
 #!/usr/bin/env python3
+"""
+Publication-style 3-panel HRRR time-lag diagnostic.
+
+Compatible with metrics_shard_*.csv.gz from run_timelag_experiment.py.
+
+Panel (a)
+    C-P FSS empirical median/IQR for lag 1/3/6 h, with C-N baseline and
+    ordering-violation percentage P[FSS(C,P) <= FSS(C,N)].
+
+Panel (b)
+    Stage-IV consistency:
+        FSS(P,O) - FSS(C,O)
+    plus unrelated-negative baseline:
+        FSS(N,O_C) - FSS(C,O)
+    The latter is diagnostic only, not forecast skill.
+
+Panel (c)
+    Median FSS(C,P) versus neighborhood width.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -7,353 +27,427 @@ from pathlib import Path
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
 
-LAGS = [1, 3, 6]
-LAG_LABELS = ["1", "3", "6"]
-XPOS = np.arange(len(LAGS))
-
+LAGS = (1, 3, 6)
 LAG_COLORS = {
-    1: "#1f77b4",   # blue
-    3: "#d62728",   # red
-    6: "#7f3fbf",   # purple
+    1: "#1f77b4",  # blue
+    3: "#d62728",  # red
+    6: "#7f3fbf",  # purple
 }
-NEG_COLOR = "#6f6f6f"
 
 
-def set_style():
-    mpl.rcParams.update(
-        {
-            "font.size": 12,
-            "axes.titlesize": 14,
-            "axes.titleweight": "bold",
-            "axes.labelsize": 14,
-            "axes.labelweight": "bold",
-            "xtick.labelsize": 12,
-            "ytick.labelsize": 12,
-            "xtick.major.width": 1.2,
-            "ytick.major.width": 1.2,
-            "axes.linewidth": 1.2,
-            "legend.fontsize": 12,
-        }
+def load_metrics(exp: Path) -> pd.DataFrame:
+    paths = sorted((exp / "shards").glob("metrics_shard_*.csv.gz"))
+    if not paths:
+        raise RuntimeError(f"No metrics shards found under {exp / 'shards'}")
+    return pd.concat(
+        [pd.read_csv(p, low_memory=False) for p in paths],
+        ignore_index=True,
     )
 
 
-def bold_ticklabels(ax):
-    for lab in ax.get_xticklabels() + ax.get_yticklabels():
-        lab.set_fontweight("bold")
-
-
-def central_interval(values, p_lo=25, p_hi=75):
-    x = pd.to_numeric(values, errors="coerce").dropna().to_numpy(float)
+def qstats(x):
+    x = pd.to_numeric(x, errors="coerce").dropna().to_numpy(float)
     if len(x) == 0:
-        return np.nan, np.nan, np.nan
-    return np.percentile(x, p_lo), np.percentile(x, 50), np.percentile(x, p_hi)
+        return np.nan, np.nan, np.nan, 0
+    return (
+        float(np.median(x)),
+        float(np.quantile(x, 0.25)),
+        float(np.quantile(x, 0.75)),
+        len(x),
+    )
+
+
+def paired_stage4(cp, po, co, fcol, lag):
+    """
+    Build per-positive Stage-IV deltas by matching sample_id + lag + direction.
+    """
+    po_l = po.loc[
+        po["lag_hours"] == lag,
+        ["sample_id", "direction", fcol],
+    ].rename(columns={fcol: "fss_po"})
+
+    co_u = (
+        co[["sample_id", fcol]]
+        .drop_duplicates("sample_id")
+        .rename(columns={fcol: "fss_co"})
+    )
+
+    d = po_l.merge(co_u, on="sample_id", how="inner")
+    d["delta"] = d["fss_po"] - d["fss_co"]
+    return d
+
+
+def negative_stage4(no, co, fcol):
+    no_u = no[["sample_id", "negative_index", fcol]].rename(
+        columns={fcol: "fss_no"}
+    )
+    co_u = (
+        co[["sample_id", fcol]]
+        .drop_duplicates("sample_id")
+        .rename(columns={fcol: "fss_co"})
+    )
+    d = no_u.merge(co_u, on="sample_id", how="inner")
+    d["delta"] = d["fss_no"] - d["fss_co"]
+    return d
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--experiment-dir", required=True)
-    parser.add_argument("--primary-window", type=int, default=15)
-    parser.add_argument("--grid-spacing-km", type=float, default=3.0)
-    parser.add_argument(
-        "--title",
-        default="HRRR time-lag positive-pair diagnostics",
-    )
-    args = parser.parse_args()
-
-    set_style()
+    p = argparse.ArgumentParser()
+    p.add_argument("--experiment-dir", required=True)
+    p.add_argument("--primary-window", type=int, default=15)
+    args = p.parse_args()
 
     exp = Path(args.experiment_dir)
-    shard_paths = sorted((exp / "shards").glob("metrics_shard_*.csv.gz"))
-    if not shard_paths:
-        raise SystemExit("No shard files found.")
-
-    df = pd.concat(
-        [pd.read_csv(path, low_memory=False) for path in shard_paths],
-        ignore_index=True,
-    )
-    df["lag_hours"] = pd.to_numeric(df["lag_hours"], errors="coerce")
+    metrics = load_metrics(exp)
 
     fcol = f"fss_w{args.primary_window}"
-    if fcol not in df.columns:
-        raise SystemExit(
-            f"Required FSS column {fcol!r} not found. "
-            f"Available FSS columns: {[c for c in df.columns if c.startswith('fss_w')]}"
+    if fcol not in metrics.columns:
+        raise RuntimeError(
+            f"{fcol} not found. Available FSS columns: "
+            f"{[c for c in metrics.columns if c.startswith('fss_w')]}"
         )
 
-    cp = df[df["relation"] == "CP"].copy()
-    cn = df[df["relation"] == "CN"].copy()
-    co = df[df["relation"] == "CO"].copy()
-    po = df[df["relation"] == "PO"].copy()
-    no = df[df["relation"] == "NO"].copy()
+    cp = metrics.loc[metrics["relation"] == "CP"].copy()
+    cn = metrics.loc[metrics["relation"] == "CN"].copy()
+    co = metrics.loc[metrics["relation"] == "CO"].copy()
+    po = metrics.loc[metrics["relation"] == "PO"].copy()
+    no = metrics.loc[metrics["relation"] == "NO"].copy()
 
-    violation_rows = []
-    for lag in LAGS:
-        merged = cp.loc[cp["lag_hours"] == lag, ["sample_id", fcol]].merge(
-            cn[["sample_id", fcol]],
-            on="sample_id",
-            suffixes=("_cp", "_cn"),
-        ).dropna()
-
-        violation_rows.append(
-            {
-                "lag_hours": lag,
-                "ordering_violation_pct": 100.0 * np.mean(
-                    merged[f"{fcol}_cp"] <= merged[f"{fcol}_cn"]
-                ),
-                "comparisons": len(merged),
-            }
-        )
-    violation = pd.DataFrame(violation_rows)
-
-    coref = co[["sample_id", fcol, "bcrmse_mm", "rmse_mm"]].rename(
-        columns={
-            fcol: "fss_co",
-            "bcrmse_mm": "bcrmse_co",
-            "rmse_mm": "rmse_co",
-        }
-    )
-
-    pod = po.merge(coref, on="sample_id")
-    pod["delta_obs_fss"] = pod[fcol] - pod["fss_co"]
-    pod["delta_obs_bcrmse"] = pod["bcrmse_mm"] - pod["bcrmse_co"]
-
-    nod = no.merge(coref, on="sample_id")
-    nod["delta_obs_fss"] = nod[fcol] - nod["fss_co"]
+    # Read metadata for labels.
+    meta_paths = sorted((exp / "shards").glob("metrics_shard_*.json"))
+    meta = json.loads(meta_paths[0].read_text()) if meta_paths else {}
+    negative_mode = meta.get("negative_mode", "unknown")
+    climo_days = meta.get("climo_window_days")
 
     summary_rows = []
+
     for lag in LAGS:
-        c = cp[cp["lag_hours"] == lag]
-        q = pod[pod["lag_hours"] == lag]
-        v = violation.loc[violation["lag_hours"] == lag].iloc[0]
+        cpl = cp.loc[cp["lag_hours"] == lag].copy()
+
+        med_cp, q25_cp, q75_cp, n_cp = qstats(cpl[fcol])
+        med_cn, q25_cn, q75_cn, n_cn = qstats(cn[fcol])
+
+        # Every C-P pair is compared against every sampled N from that same C.
+        comp = (
+            cpl[["sample_id", fcol]]
+            .rename(columns={fcol: "fss_cp"})
+            .merge(
+                cn[["sample_id", "negative_index", fcol]].rename(
+                    columns={fcol: "fss_cn"}
+                ),
+                on="sample_id",
+                how="inner",
+            )
+            .dropna(subset=["fss_cp", "fss_cn"])
+        )
+
+        if len(comp):
+            violation = 100.0 * np.mean(comp["fss_cp"] <= comp["fss_cn"])
+            strict = 100.0 * np.mean(comp["fss_cp"] < comp["fss_cn"])
+            ties = 100.0 * np.mean(
+                np.isclose(comp["fss_cp"], comp["fss_cn"], rtol=0.0, atol=1e-12)
+            )
+        else:
+            violation = strict = ties = np.nan
+
+        po_delta = paired_stage4(cp, po, co, fcol, lag)
+        no_delta = negative_stage4(no, co, fcol)
+
+        po_med, po_q25, po_q75, n_stage4 = qstats(po_delta["delta"])
+        no_med, no_q25, no_q75, n_no = qstats(no_delta["delta"])
 
         summary_rows.append(
             {
                 "lag_hours": lag,
-                "n_cp_pairs": len(c),
-                "median_cp_fss": c[fcol].median(),
-                "q25_cp_fss": c[fcol].quantile(0.25),
-                "q75_cp_fss": c[fcol].quantile(0.75),
-                "ordering_violation_pct": v["ordering_violation_pct"],
-                "n_ordering_comparisons": int(v["comparisons"]),
-                "n_stage4_positive_pairs": len(q),
-                "median_obs_fss_delta_po_minus_co": q["delta_obs_fss"].median(),
-                "median_abs_obs_fss_delta": q["delta_obs_fss"].abs().median(),
-                "median_obs_bcrmse_delta_mm": q["delta_obs_bcrmse"].median(),
-                "median_abs_obs_bcrmse_delta_mm": q["delta_obs_bcrmse"].abs().median(),
-                "median_cp_bcrmse_mm": c["bcrmse_mm"].median(),
-                "median_cp_mean_abs_diff_mm": c["mean_abs_diff_mm"].median(),
-                "median_cp_corr": c["corr"].median(),
+                "n_cp_pairs": n_cp,
+                "median_cp_fss": med_cp,
+                "q25_cp_fss": q25_cp,
+                "q75_cp_fss": q75_cp,
+                "median_cn_fss": med_cn,
+                "q25_cn_fss": q25_cn,
+                "q75_cn_fss": q75_cn,
+                "ordering_violation_pct": violation,
+                "strict_reversal_pct": strict,
+                "tie_pct": ties,
+                "n_ordering_comparisons": len(comp),
+                "n_stage4_positive_pairs": n_stage4,
+                "median_obs_fss_delta_po_minus_co": po_med,
+                "q25_obs_fss_delta_po_minus_co": po_q25,
+                "q75_obs_fss_delta_po_minus_co": po_q75,
+                "median_obs_fss_delta_no_minus_co": no_med,
+                "q25_obs_fss_delta_no_minus_co": no_q25,
+                "q75_obs_fss_delta_no_minus_co": no_q75,
+                "n_stage4_negative_pairs": n_no,
             }
         )
 
     summary = pd.DataFrame(summary_rows)
+
     summary_dir = exp / "summary"
+    fig_dir = exp / "figures"
     summary_dir.mkdir(parents=True, exist_ok=True)
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
     summary.to_csv(summary_dir / "timelag_summary.csv", index=False)
 
-    cp.groupby(["lag_hours", "direction"]).agg(
-        n=("sample_id", "size"),
-        median_fss=(fcol, "median"),
-        median_bcrmse_mm=("bcrmse_mm", "median"),
-        median_mean_abs_diff_mm=("mean_abs_diff_mm", "median"),
-        median_corr=("corr", "median"),
-    ).reset_index().to_csv(
+    # Directional summary retained because it is useful for later checks.
+    direction_rows = []
+    for lag in LAGS:
+        for direction in ("earlier_init", "later_init"):
+            d = cp.loc[
+                (cp["lag_hours"] == lag) & (cp["direction"] == direction)
+            ]
+            med, q25, q75, n = qstats(d[fcol])
+            direction_rows.append(
+                {
+                    "lag_hours": lag,
+                    "direction": direction,
+                    "median_fss": med,
+                    "q25_fss": q25,
+                    "q75_fss": q75,
+                    "n": n,
+                }
+            )
+    pd.DataFrame(direction_rows).to_csv(
         summary_dir / "timelag_summary_by_direction.csv",
         index=False,
     )
 
-    fig = plt.figure(figsize=(16.3, 5.6), constrained_layout=True)
-    gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 1.0])
+    mpl.rcParams.update(
+        {
+            "font.size": 12,
+            "font.weight": "bold",
+            "axes.labelsize": 13,
+            "axes.labelweight": "bold",
+            "axes.titlesize": 15,
+            "axes.titleweight": "bold",
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            "axes.linewidth": 1.2,
+        }
+    )
 
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax3 = fig.add_subplot(gs[0, 2])
+    fig, axes = plt.subplots(1, 3, figsize=(16.5, 5.2))
+    fig.subplots_adjust(
+        left=0.055,
+        right=0.985,
+        bottom=0.14,
+        top=0.78,
+        wspace=0.24,
+    )
 
-    # Panel A
-    offset = 0.13
-    for lag, xpos in zip(LAGS, XPOS):
-        cp_vals = cp.loc[cp["lag_hours"] == lag, fcol]
-        q25, med, q75 = central_interval(cp_vals, 25, 75)
-        ax1.errorbar(
-            xpos - offset,
-            med,
-            yerr=[[med - q25], [q75 - med]],
+    xpos = np.arange(3, dtype=float)
+
+    # ------------------------------------------------------------------
+    # (a) C-P versus C-N
+    # ------------------------------------------------------------------
+    ax = axes[0]
+
+    for i, lag in enumerate(LAGS):
+        r = summary.loc[summary["lag_hours"] == lag].iloc[0]
+        color = LAG_COLORS[lag]
+
+        ax.errorbar(
+            xpos[i] - 0.12,
+            r["median_cp_fss"],
+            yerr=[
+                [r["median_cp_fss"] - r["q25_cp_fss"]],
+                [r["q75_cp_fss"] - r["median_cp_fss"]],
+            ],
             fmt="o",
-            capsize=5,
-            markersize=8,
-            lw=2.0,
-            color=LAG_COLORS[lag],
-            zorder=3,
-        )
-
-        cn_vals = cn[fcol]
-        q25n, medn, q75n = central_interval(cn_vals, 25, 75)
-        ax1.errorbar(
-            xpos + offset,
-            medn,
-            yerr=[[medn - q25n], [q75n - medn]],
-            fmt="s",
+            color=color,
+            ecolor=color,
+            elinewidth=1.8,
             capsize=5,
             markersize=7,
-            lw=2.0,
-            color=NEG_COLOR,
             zorder=3,
         )
 
-        vp = float(
-            violation.loc[violation["lag_hours"] == lag, "ordering_violation_pct"].iloc[0]
+        ax.errorbar(
+            xpos[i] + 0.14,
+            r["median_cn_fss"],
+            yerr=[
+                [r["median_cn_fss"] - r["q25_cn_fss"]],
+                [r["q75_cn_fss"] - r["median_cn_fss"]],
+            ],
+            fmt="s",
+            color="0.45",
+            ecolor="0.45",
+            elinewidth=1.5,
+            capsize=4,
+            markersize=6,
+            zorder=3,
         )
-        ax1.text(
-            xpos - offset + 0.10,
-            med - 0.02,
-            f"{vp:.2f}%\nviolation",
+
+        ax.text(
+            xpos[i] - 0.02,
+            min(0.97, float(r["median_cp_fss"]) + 0.01),
+            f"{r['ordering_violation_pct']:.2f}%\nviolation",
             ha="left",
             va="center",
             fontsize=10,
             fontweight="bold",
         )
 
-    ax1.set_xticks(XPOS)
-    ax1.set_xticklabels(LAG_LABELS)
-    ax1.set_xlabel("Time lag (hours)")
-    ax1.set_ylabel("FSS")
-    ax1.set_title("(a)", pad=10)
-    ax1.set_ylim(-0.02, 1.02)
-    ax1.grid(alpha=0.20)
-    ax1.legend(
-        handles=[
-            Line2D([0], [0], marker="o", color="black", linestyle="None",
-                   markersize=8, label="C–P"),
-            Line2D([0], [0], marker="s", color="black", linestyle="None",
-                   markersize=7, label="C–N"),
-        ],
-        loc="upper right",
-        frameon=False,
-    )
-    bold_ticklabels(ax1)
+    # black legend markers because color identifies lag, not relationship
+    ax.plot([], [], "ko", label="C–P")
+    ax.plot([], [], "ks", label="C–N")
+    ax.legend(loc="upper right", frameon=False)
 
-    # Panel B
-    for lag, xpos in zip(LAGS, XPOS):
-        vals = pod.loc[pod["lag_hours"] == lag, "delta_obs_fss"]
-        q25, med, q75 = central_interval(vals, 25, 75)
-        ax2.errorbar(
-            xpos - offset / 2,
-            med,
-            yerr=[[med - q25], [q75 - med]],
+    ax.set_xticks(xpos, [str(x) for x in LAGS])
+    ax.set_xlabel("Time lag (hours)")
+    ax.set_ylabel("FSS")
+    ax.set_ylim(-0.02, 1.02)
+    ax.grid(alpha=0.18)
+    ax.set_title("(a)", pad=6)
+
+    # ------------------------------------------------------------------
+    # (b) Stage IV consistency
+    # ------------------------------------------------------------------
+    ax = axes[1]
+    ax.axhline(0.0, color="black", linestyle=":", linewidth=1.4)
+
+    for i, lag in enumerate(LAGS):
+        r = summary.loc[summary["lag_hours"] == lag].iloc[0]
+        color = LAG_COLORS[lag]
+
+        ax.errorbar(
+            xpos[i] - 0.08,
+            r["median_obs_fss_delta_po_minus_co"],
+            yerr=[
+                [
+                    r["median_obs_fss_delta_po_minus_co"]
+                    - r["q25_obs_fss_delta_po_minus_co"]
+                ],
+                [
+                    r["q75_obs_fss_delta_po_minus_co"]
+                    - r["median_obs_fss_delta_po_minus_co"]
+                ],
+            ],
             fmt="o",
-            capsize=5,
-            markersize=8,
-            lw=2.0,
-            color=LAG_COLORS[lag],
-            zorder=3,
-        )
-
-        valsn = nod["delta_obs_fss"]
-        q25n, medn, q75n = central_interval(valsn, 25, 75)
-        ax2.errorbar(
-            xpos + offset / 2,
-            medn,
-            yerr=[[medn - q25n], [q75n - medn]],
-            fmt="s",
+            color=color,
+            ecolor=color,
+            elinewidth=1.7,
             capsize=5,
             markersize=7,
-            lw=2.0,
-            color=NEG_COLOR,
-            zorder=3,
         )
 
-    ax2.axhline(0.0, color="black", linestyle=":", linewidth=1.6, zorder=1)
-    ax2.set_xticks(XPOS)
-    ax2.set_xticklabels(LAG_LABELS)
-    ax2.set_xlabel("Time lag (hours)")
-    ax2.set_ylabel(r"$\Delta$ FSS")
-    ax2.set_title("(b)", pad=10)
-    ax2.set_ylim(-0.67, 0.15)
-    ax2.grid(alpha=0.20)
-    ax2.legend(
-        handles=[
-            Line2D([0], [0], marker="o", color="black", linestyle="None",
-                   markersize=8, label="P–O minus C–O"),
-            Line2D([0], [0], marker="s", color="black", linestyle="None",
-                   markersize=7, label="N–O minus C–O*"),
-        ],
-        loc="upper right",
-        frameon=False,
-    )
-    ax2.text(
+        ax.errorbar(
+            xpos[i] + 0.10,
+            r["median_obs_fss_delta_no_minus_co"],
+            yerr=[
+                [
+                    r["median_obs_fss_delta_no_minus_co"]
+                    - r["q25_obs_fss_delta_no_minus_co"]
+                ],
+                [
+                    r["q75_obs_fss_delta_no_minus_co"]
+                    - r["median_obs_fss_delta_no_minus_co"]
+                ],
+            ],
+            fmt="s",
+            color="0.45",
+            ecolor="0.45",
+            elinewidth=1.5,
+            capsize=4,
+            markersize=6,
+        )
+
+    ax.plot([], [], "ko", label="P–O minus C–O")
+    ax.plot([], [], "ks", label="N–O minus C–O*")
+    ax.legend(loc="upper right", frameon=False)
+
+    ax.set_xticks(xpos, [str(x) for x in LAGS])
+    ax.set_xlabel("Time lag (hours)")
+    ax.set_ylabel(r"$\Delta$ FSS")
+    ax.set_ylim(-0.67, 0.15)
+    ax.grid(alpha=0.18)
+    ax.set_title("(b)", pad=6)
+
+    ax.text(
         0.01,
-        0.015,
+        0.02,
         "*N–O is an unrelated-field baseline, not forecast skill.",
-        transform=ax2.transAxes,
-        fontsize=9.0,
+        transform=ax.transAxes,
+        fontsize=9,
         fontweight="bold",
+        ha="left",
         va="bottom",
     )
-    bold_ticklabels(ax2)
 
-    # Panel C
-    fss_cols = sorted(
-        [c for c in cp.columns if c.startswith("fss_w")],
-        key=lambda c: int(c.split("w")[1]),
-    )
-    windows = [int(c.split("w")[1]) for c in fss_cols]
-    scales_km = np.array(windows) * args.grid_spacing_km
+    # ------------------------------------------------------------------
+    # (c) FSS versus scale for C-P
+    # ------------------------------------------------------------------
+    ax = axes[2]
+
+    fss_cols = []
+    for c in cp.columns:
+        if c.startswith("fss_w"):
+            try:
+                w = int(c.split("w", 1)[1])
+                fss_cols.append((w, c))
+            except ValueError:
+                pass
+    fss_cols = sorted(fss_cols)
 
     for lag in LAGS:
-        subset = cp[cp["lag_hours"] == lag]
-        medians = []
-        for col in fss_cols:
-            x = pd.to_numeric(subset[col], errors="coerce").dropna()
-            medians.append(x.median() if len(x) else np.nan)
+        d = cp.loc[cp["lag_hours"] == lag]
+        xs = []
+        ys = []
+        for w, col in fss_cols:
+            xs.append(3.0 * w)
+            vals = pd.to_numeric(d[col], errors="coerce").dropna()
+            ys.append(float(np.median(vals)) if len(vals) else np.nan)
 
-        ax3.plot(
-            scales_km,
-            medians,
+        ax.plot(
+            xs,
+            ys,
             marker="o",
-            ms=8,
-            lw=2.5,
+            linewidth=2.4,
+            markersize=6,
             color=LAG_COLORS[lag],
             label=f"{lag}-h lag",
-            zorder=4,
         )
 
-    ax3.set_xlabel("Neighborhood width (km)")
-    ax3.set_ylabel("FSS")
-    ax3.set_title("(c)", pad=10)
-    ax3.set_ylim(0.0, 1.0)
-    ax3.grid(alpha=0.20)
-    ax3.legend(loc="lower right", frameon=False)
-    bold_ticklabels(ax3)
+    ax.set_xlabel("Neighborhood width (km)")
+    ax.set_ylabel("FSS")
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(alpha=0.18)
+    ax.legend(loc="lower right", frameon=False)
+    ax.set_title("(c)", pad=6)
 
-    metas = sorted((exp / "shards").glob("metrics_shard_*.json"))
-    threshold = None
-    if metas:
-        threshold = json.loads(metas[0].read_text()).get("fss_threshold_mm")
+    for ax in axes:
+        for tick in ax.get_xticklabels() + ax.get_yticklabels():
+            tick.set_fontweight("bold")
 
-    title = args.title
-    if threshold is not None:
-        title += f"\nFSS threshold = {threshold:g} mm / 6 h"
+    neg_desc = (
+        f"climo45 negatives (±{climo_days} climatological days)"
+        if negative_mode == "climo45"
+        else "calendar-unrestricted negatives"
+    )
 
-    fig.suptitle(title, fontsize=18, fontweight="bold")
+    fig.suptitle(
+        "HRRR time-lag positive-pair diagnostics\n"
+        f"FSS threshold = 5 mm / 6 h; {neg_desc}",
+        fontsize=17,
+        fontweight="bold",
+        y=0.96,
+    )
 
-    fig_dir = exp / "figures"
-    fig_dir.mkdir(parents=True, exist_ok=True)
-
-    png_path = fig_dir / "timelag_lag_selection_3panel_v4.png"
-    pdf_path = fig_dir / "timelag_lag_selection_3panel_v4.pdf"
-
-    fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    fig.savefig(pdf_path, bbox_inches="tight")
+    png = fig_dir / "timelag_lag_selection_3panel.png"
+    pdf = fig_dir / "timelag_lag_selection_3panel.pdf"
+    fig.savefig(png, dpi=300, bbox_inches="tight")
+    fig.savefig(pdf, bbox_inches="tight")
     plt.close(fig)
 
     print(summary.to_string(index=False))
-    print(f"Wrote {png_path}")
-    print(f"Wrote {pdf_path}")
+    print(f"Wrote {summary_dir / 'timelag_summary.csv'}")
+    print(f"Wrote {png}")
+    print(f"Wrote {pdf}")
 
 
 if __name__ == "__main__":
