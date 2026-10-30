@@ -1,103 +1,76 @@
 # Repository cleanup status
 
-The complete development state is preserved by the
-`research-snapshot-2026-10-30` tag. The clean branch therefore maintains only
-workflows needed to reproduce the final SYN-3/SYN-8/NFV study plus a small set
-of supporting method/data utilities.
+The complete exploratory state is preserved by the
+`research-snapshot-2026-10-30` tag. The live repository now maintains only code
+needed to reproduce the final SYN-3/SYN-8/NFV study plus supporting data-build
+and method utilities.
 
-## Completed
+## Completed refactor
 
-### Patch 1 — reproducibility foundation
+### Reproducibility foundation
 
-- one local `site_config.sh` for machine/user paths
-- URSA-focused environment specification
-- data/reproduction documentation
-- removal of personal paths from canonical configuration
+- one untracked `site_config.sh` for machine/user paths
+- URSA-focused environment definition
+- frozen-data/HPSS documentation
+- removal of personal runtime paths from tracked live code
 
-### Patch 2 / 2a — final training
+### Final training
 
 ```text
-SYN-3 / SYN-8
-  src/training/synthetic.py
-  scripts/train_syn.py
-  scripts/submit_syn.sh
-  slurm/train_syn.slurm
-
-NFV
-  src/training/nfv.py
-  scripts/train_nfv.py
-  scripts/submit_nfv.sh
-  slurm/train_nfv.slurm
+SYN-3 / SYN-8 -> src/training/synthetic.py
+NFV           -> src/training/nfv.py
 ```
 
-SYN-3 and SYN-8 now share one training engine while retaining their validated
-sampling and transform definitions.
+SYN-3 and SYN-8 share one validated training engine while retaining their final
+sampling, transform, and objective definitions. All three models have symmetric
+full/smoke launch paths.
 
-### Patch 3 — final diagnostics
-
-Canonical diagnostic code is organized by purpose:
+### Final diagnostics
 
 ```text
-scripts/data/       derived-data/archive preparation
+scripts/data/       derived evaluation-archive construction
 scripts/evaluate/   score calculation / diagnostic experiments
-scripts/plot/       presentation-ready figures and galleries
+scripts/plot/       final figures and galleries
 ```
 
-Primary workflows:
+Primary maintained diagnostics are morphology, Stage IV percentile galleries,
+forecast-hour curves, feature-space inversion, and NFV time-lag design analysis.
+
+### Historical workflow pruning
+
+BatchNorm/FP32 investigations, V1/V2 comparisons, old Wang diagnostic
+generations, pilot inversion paths, superseded Stage-IV/morphology pipelines,
+and temporary repair scripts were removed from the visible branch after the
+canonical replacements were validated on URSA.
+
+### Reproduction interface
+
+The final cleanup adds:
 
 ```text
-morphology      scripts/evaluate/morphology.py
-                scripts/plot/morphology.py
-                slurm/evaluate_morphology.slurm
-
-Stage IV        scripts/evaluate/stageiv.py
-                scripts/plot/stageiv_buckets.py
-                slurm/evaluate_stageiv.slurm
-
-forecast hour   scripts/evaluate/forecast_hour_traditional.py
-                scripts/evaluate/forecast_hour.py
-                scripts/plot/forecast_hour.py
-                slurm/evaluate_forecast_hour.slurm
-
-inversion       src/eval/feature_inversion.py
-                scripts/evaluate/inversion.py
-                scripts/plot/inversion.py
-                slurm/evaluate_inversion.slurm
-
-time lag        scripts/evaluate/timelag.py
-                scripts/plot/timelag*.py
-                slurm/evaluate_timelag.slurm
+scripts/reproduce.sh               small documented dispatcher
+scripts/preflight.py               setup/data/checkpoint validation
+scripts/restore_hpss_snapshot.sh   selective frozen-data restore
+scripts/check_repo.sh              clean-clone code/syntax checks
 ```
 
-Final traditional verification defaults are now encoded directly in the
-canonical evaluators: 0.1 inch (2.54 mm), with 0.5 inch retained as the second
-Stage-IV categorical threshold. The temporary post-processing scripts that
-recomputed inch-based metrics are therefore historical.
-
-## Patch 3b — historical workflow pruning
-
-The canonical Patch-3 diagnostics were validated on URSA before pruning. The
-following development-only families were removed from the visible branch:
-
-- BatchNorm and FP32 investigations
-- V1/V2 learned-metric comparisons
-- old Wang/V2 diagnostic generations
-- pilot/smoke feature-space inversion workflows
-- superseded Stage-IV and morphology generations
-- temporary inch-threshold recomputation scripts
-- superseded pre-final training workflows and launchers
-
-All of these remain recoverable from `research-snapshot-2026-10-30`.
+The dispatcher intentionally does not auto-chain expensive Slurm jobs.
 
 ## Supporting workflows retained
 
-The clean branch still retains utilities needed to build or inspect the canonical
-data products, including HRRR/Stage-IV preprocessing, archive validation,
+Utilities remain for HRRR/Stage-IV preprocessing, archive validation,
 normalization/split construction, transform schematics, and targeted audits.
+These support rebuilding or inspecting canonical inputs without cluttering the
+primary training/evaluation path.
 
-## Remaining cleanup
+## Final promotion checklist
 
-1. Add the simple end-to-end `reproduce.sh` front door.
-2. Consolidate the remaining data-preparation entry points and documentation.
-3. Run final clean-clone smoke tests.
-4. Promote the validated branch through `develop` to `main`.
+1. Apply and commit the reproduction-interface patch.
+2. Run `./scripts/check_repo.sh` on URSA.
+3. Run `./scripts/reproduce.sh preflight diagnostics` against the frozen data.
+4. Optionally validate a fresh SYN/NFV smoke job from the front door.
+5. Push `refactor/reproducible-v1`, merge to `develop`, then promote the tested
+   state to `main`.
+
+Figure aesthetics and presentation-specific refinements can continue after this
+structural reproducibility milestone without reopening the repository cleanup.

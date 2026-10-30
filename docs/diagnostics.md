@@ -10,6 +10,8 @@ All commands below assume:
 source load_env.sh
 ```
 
+The same workflows are available through the thin `scripts/reproduce.sh` front door documented in `docs/REPRODUCING_RESULTS.md`.
+
 ## 1. Controlled morphology response
 
 Purpose: measure how SYN-3, SYN-8, NFV, and traditional metrics respond to the

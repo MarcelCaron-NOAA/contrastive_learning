@@ -1,7 +1,7 @@
-# Data layout and archived snapshot
+# Data layout and frozen snapshot
 
-Large datasets are stored outside Git. All runtime paths are derived from the
-local `site_config.sh` loaded by `load_env.sh`.
+Large datasets are stored outside Git. Runtime locations come from the single
+local `site_config.sh` file.
 
 ## Canonical local layout
 
@@ -20,18 +20,24 @@ $DATA_DIR/
 └── derived/
 ```
 
-The HRRR stores are daily Zarr-v2 archives packaged as ZIP files. The manifest
-is the authoritative index from logical samples to daily stores.
+The HRRR products are daily Zarr-v2 stores packaged as ZIP files. The manifests
+are the authoritative indices from logical samples to daily stores.
 
 ## Frozen NOAA/EMC snapshot (2026-10-30)
 
-An internal snapshot was archived to the group-readable HPSS location:
+The group-readable internal HPSS location is:
 
 ```text
 /NCEPDEV/emc-global/2year/marcel.caron/contrastive_learning
 ```
 
-The snapshot contains:
+Set that path once in your untracked `site_config.sh`:
+
+```bash
+export HPSS_DATA_ROOT="/NCEPDEV/emc-global/2year/marcel.caron/contrastive_learning"
+```
+
+The directory contains:
 
 ```text
 hrrr_qpf6_native_2020.tar
@@ -46,28 +52,85 @@ hrrr_qpf6_extended_2025.tar
 project_support_20261030.tar
 ```
 
-Each HTAR archive has a matching `.idx` file. Permissions are owner read/write,
-`emc-global` group read, and no world access.
+Each HTAR archive also has a matching `.idx` file. At archive time, the native
+manifest referenced **2,121/2,121** present daily stores and the extended
+manifest referenced **357/357** present stores.
 
-At archive time the authoritative HRRR manifests referenced:
+## Restore tiers
 
-- 2,121 / 2,121 present native daily stores;
-- 357 / 357 present extended-synoptic daily stores.
+The helper restores directly into `$DATA_DIR` and preserves the archived
+relative directory structure.
 
-The project-support archive contains the smaller `metadata/`, `observations/`,
-`derived/`, and HRRR metadata trees.
+### Project support (~37 GB)
+
+Contains `metadata/`, `observations/`, `derived/`, and the HRRR metadata trees.
+This includes the final checkpoints and processed evaluation datasets, so it is
+the normal starting point for reproducing final diagnostics without retraining.
+
+```bash
+./scripts/reproduce.sh restore support
+```
+
+### Native HRRR (~1.1 TB)
+
+Required for retraining SYN-3, SYN-8, or NFV. Restore all years:
+
+```bash
+./scripts/reproduce.sh restore native
+```
+
+Or selected years:
+
+```bash
+./scripts/reproduce.sh restore native 2024 2025
+```
+
+The final training split spans the archived multi-year period, so exact
+retraining requires the complete native set.
+
+### Extended-synoptic HRRR (~24 GB)
+
+Needed only to rebuild the forecast-hour archive from source products; it is not
+required when the processed forecast-hour archive is already restored from
+`project_support_20261030.tar`.
+
+```bash
+./scripts/reproduce.sh restore extended
+```
+
+### Everything
+
+```bash
+./scripts/reproduce.sh restore all
+```
+
+Use `DRY_RUN=1` with the restore helper to print HTAR extraction commands without
+executing them.
+
+## Preflight after restore
+
+Processed/final diagnostic inputs:
+
+```bash
+source load_env.sh
+./scripts/reproduce.sh preflight diagnostics
+```
+
+Training archive, including every unique store referenced by the manifest:
+
+```bash
+./scripts/reproduce.sh preflight training --verify-stores
+```
 
 ## Stage IV note
 
-The raw Stage IV GRIB2 download cache is not considered part of the irreplaceable
-snapshot. The 1,000-case processed evaluation arrays and their case metadata are
-preserved under `derived/evaluation/stageiv_reference_v1/`. Raw Stage IV inputs
-can be reacquired when needed.
+The raw Stage IV GRIB2 download cache is **not** part of the irreplaceable
+snapshot. The processed 1,000-case Stage-IV reference arrays and the final
+forecast-hour evaluation archive are stored in `derived/` and are included in
+`project_support_20261030.tar`. Raw Stage IV can be reacquired if either archive
+must be rebuilt from source.
 
-## Rebuilding the processed Stage IV reference archive
-
-The frozen project-support archive already contains the validated 1,000-case
-Stage-IV reference dataset. If it must be rebuilt from raw Stage IV files, use:
+To rebuild the 1,000-case reference archive from raw Stage IV:
 
 ```bash
 export STAGEIV_ROOT=/path/to/stage4/6h/files
@@ -75,16 +138,6 @@ export HRRR_GRID_TEMPLATE=/path/to/a/native/hrrr/grid/file
 sbatch slurm/run_stageiv_reference_build.slurm
 ```
 
-This rebuilds the case manifest and the HRRR/Stage-IV 256x256 arrays under
-`$DATA_DIR/derived/evaluation/stageiv_reference_v1/`. Raw Stage IV is treated as
-reacquirable source data rather than a permanent repository asset.
-
-## Restoring data
-
-Restore only the years/products required for the experiment you intend to run.
-For example, inspect an archive first with HTAR before extracting it. Exact
-restore commands are intentionally kept separate from model code so the same
-repository can work with either restored or freshly preprocessed data.
-
-After restoring, verify that `site_config.sh` points `DATA_DIR` at the restored
-root and run the repository preflight/audit tools before training.
+The data-rebuild utilities remain in the repository, but rebuilding public/raw
+source data is deliberately separate from the normal frozen-snapshot
+reproduction path.

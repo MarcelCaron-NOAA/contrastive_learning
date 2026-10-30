@@ -1,32 +1,61 @@
-# Reproducing the final experiments
+# Reproducing the final SYN-3 / SYN-8 / NFV study
 
-This is the supported URSA workflow for the final SYN-3, SYN-8, and NFV study.
-Historical development experiments are preserved in Git history and the
-`research-snapshot-2026-10-30` tag.
+This is the supported URSA workflow. Historical development experiments are
+preserved by Git history and `research-snapshot-2026-10-30`.
 
-## 0. Initialize the project
+## 0. Setup
 
 ```bash
-cp site_config.example.sh site_config.sh   # first clone only; edit for account
+cp site_config.example.sh site_config.sh   # first clone only
+# edit WORK_DIR, ENV_DIR, and optionally HPSS_DATA_ROOT
 source load_env.sh
 ```
 
-See `docs/DATA.md` to restore the frozen data snapshot or rebuild individual
-data products.
+For NOAA/EMC restoration details, see `docs/DATA.md`.
 
-## 1. Train the final learned metrics
+The compact front door is:
 
 ```bash
-./scripts/submit_syn.sh syn3 full
-./scripts/submit_syn.sh syn8 full
-./scripts/submit_nfv.sh
+./scripts/reproduce.sh plan
 ```
 
-Short structural tests:
+It only dispatches to the canonical commands below; it does not hide or chain
+Slurm jobs.
+
+## 1. Validate the repository and local data
+
+Repository code/syntax checks:
 
 ```bash
-./scripts/submit_syn.sh syn3 smoke
-./scripts/submit_syn.sh syn8 smoke
+./scripts/check_repo.sh
+```
+
+Final diagnostic products/checkpoints:
+
+```bash
+./scripts/reproduce.sh preflight diagnostics
+```
+
+Full training archive:
+
+```bash
+./scripts/reproduce.sh preflight training --verify-stores
+```
+
+## 2. Train the final learned metrics
+
+```bash
+./scripts/reproduce.sh train syn3 full
+./scripts/reproduce.sh train syn8 full
+./scripts/reproduce.sh train nfv full
+```
+
+Short non-destructive smoke jobs use unique output directories:
+
+```bash
+./scripts/reproduce.sh train syn3 smoke
+./scripts/reproduce.sh train syn8 smoke
+./scripts/reproduce.sh train nfv smoke
 ```
 
 Canonical engines:
@@ -37,94 +66,126 @@ src/training/nfv.py        -> NFV
 ```
 
 NFV retains the historical on-disk experiment ID `hard_ranking_v3_full_v1` so
-existing validated checkpoints remain usable.
+the validated final checkpoint remains directly usable.
 
-## 2. Primary diagnostics
+## 3. Primary diagnostics
 
-### Morphology
+### Controlled morphology response
 
 ```bash
-./scripts/submit_diagnostic.sh morphology
+./scripts/reproduce.sh diagnostic morphology
 ```
 
+Outputs:
+
 ```text
-scripts/evaluate/morphology.py
-scripts/plot/morphology.py
-slurm/evaluate_morphology.slurm
+$DATA_DIR/derived/evaluation/final_syn_nfv_morphology_v1/
+  morphology_per_case_inches.csv.gz
+  morphology_summary_inches.csv
+  plots/
 ```
 
 ### Stage IV percentile galleries
 
 ```bash
-./scripts/submit_diagnostic.sh stageiv
+./scripts/reproduce.sh diagnostic stageiv
 ```
 
+Outputs:
+
 ```text
-scripts/evaluate/stageiv.py
-scripts/plot/stageiv_buckets.py
-slurm/evaluate_stageiv.slurm
+$DATA_DIR/derived/evaluation/final_syn_nfv_stageiv_v1/
+  stageiv_per_case_metrics_inches.csv.gz
+  galleries_inches/
 ```
 
 ### Forecast-hour / die-off curves
 
-The Stage-IV forecast-hour archive must exist and pass its preflight first.
-Once it does:
+The processed archive must have a `PASS` preflight report. Then:
 
 ```bash
-./scripts/submit_diagnostic.sh forecast-hour
+./scripts/reproduce.sh diagnostic forecast-hour
 ```
 
+Outputs:
+
 ```text
-scripts/evaluate/forecast_hour_traditional.py
-scripts/evaluate/forecast_hour.py
-scripts/plot/forecast_hour.py
-slurm/evaluate_forecast_hour.slurm
+$DATA_DIR/derived/evaluation/stageiv_forecast_hour_v1/
+  traditional_metrics_by_forecast_hour.csv
+  learned_similarity_per_case.csv.gz
+  verification_scores_by_forecast_hour.csv
+  plots/
 ```
 
 ### Feature-space inversion
 
 ```bash
-CASE_INDEX=299 N_STEPS=1200 ./scripts/submit_diagnostic.sh inversion
+CASE_INDEX=299 N_STEPS=1200 ./scripts/reproduce.sh diagnostic inversion
 ```
+
+The canonical targets are:
 
 ```text
-src/eval/feature_inversion.py
-scripts/evaluate/select_inversion_case.py
-scripts/evaluate/inversion.py
-scripts/plot/inversion.py
-slurm/evaluate_inversion.slurm
++0.75, +0.50, +0.25, 0.00, -0.25, -0.50, -0.75, -1.00
 ```
 
-## 3. NFV training-design / time-lag diagnostics
+Each case is isolated under:
 
 ```text
-scripts/evaluate/timelag.py
-scripts/plot/timelag.py
-scripts/plot/timelag_cases.py
-scripts/plot/timelag_negatives.py
-scripts/submit_timelag_experiment.sh
-slurm/evaluate_timelag.slurm
+$DATA_DIR/derived/evaluation/feature_inversion_v1/case_XXXX/
 ```
 
-## 4. Traditional thresholds
+### NFV time-lag design analysis
 
-The final reproducible diagnostics use inch-based precipitation thresholds:
+```bash
+./scripts/reproduce.sh diagnostic timelag
+```
+
+This remains an array-job research diagnostic because it evaluates many
+Stage-IV/HRRR relationships and supports the NFV training design rather than the
+routine final-model verification scores.
+
+## 4. Replot existing evaluation output
+
+The main non-inversion figures can be regenerated without rerunning model
+inference:
+
+```bash
+./scripts/reproduce.sh plot morphology
+./scripts/reproduce.sh plot stageiv
+./scripts/reproduce.sh plot forecast-hour
+```
+
+Inversion plotting remains case-specific; use `scripts/plot/inversion.py` with
+the desired case directory.
+
+## 5. Final traditional thresholds
+
+Canonical verification thresholds are encoded directly in the final evaluators:
 
 ```text
 0.1 in = 2.54 mm
 0.5 in = 12.70 mm
 ```
 
-Morphology ETS/POD/SR/FSS use 0.1 inch. Stage-IV FSS and wet-case filtering use
-0.1 inch; Stage-IV ETS/FBIAS/POD/SR are retained at both 0.1 and 0.5 inch.
-Forecast-hour traditional metrics use 0.1 inch.
+Morphology ETS/POD/SR/FSS use 0.1 inch. Stage-IV FSS and non-dry filtering use
+0.1 inch; Stage-IV categorical metrics retain both 0.1 and 0.5 inch. The
+forecast-hour traditional metrics use 0.1 inch.
 
-The earlier CPU-only `recompute_*_inches.py` scripts are development history;
-the canonical evaluators now compute the final inch definitions directly.
+## 6. Expected separation of responsibilities
 
-## 5. Historical workflows
+```text
+restore/build data
+      ↓
+preflight
+      ↓
+train -> checkpoints/history
+      ↓
+evaluate -> score tables / diagnostic data
+      ↓
+plot -> figures / galleries
+```
 
-BatchNorm investigations, FP32 debugging, superseded V1/V2 comparisons, pilot
-feature-inversion paths, and older diagnostic generations are not part of the
-supported reproduction path. They remain recoverable from the research snapshot
-instead of being maintained as parallel live workflows.
+The Slurm diagnostic wrappers often run evaluate + plot consecutively for
+convenience, but the Python entry points remain separate so figures can be
+regenerated from existing score products.

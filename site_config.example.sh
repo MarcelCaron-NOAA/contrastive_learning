@@ -23,6 +23,6 @@ export SCRATCH_DIR="${WORK_DIR}/scratch"
 export CONDA_MODULE="rdhpcs-conda/25.11.0"
 
 # Optional: shared/internal archive location for restoring the frozen dataset.
-# This variable is documentation/convenience only; code should not assume HPSS
-# is available unless a restore workflow explicitly uses it.
-export HPSS_DATA_ROOT="/NCEPDEV/emc-global/2year/<user>/contrastive_learning"
+# NOAA/EMC users can copy the group-readable snapshot path from docs/DATA.md.
+# Leave blank when HPSS is not being used.
+export HPSS_DATA_ROOT=""
