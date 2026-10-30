@@ -30,25 +30,47 @@ archive. See `docs/DATA.md`.
 
 ## 2. Train the final learned metrics
 
-Current canonical training entry points:
+Canonical training entry points:
 
 ```text
-SYN-3  scripts/train_syn3_wang_adapted.py
-       scripts/submit_syn3_wang_full.sh
-       slurm/train_syn3_wang.slurm
+SYN-3 / SYN-8
+  engine:    src/training/synthetic.py
+  CLI:       scripts/train_syn.py
+  submit:    scripts/submit_syn.sh
+  Slurm:     slurm/train_syn.slurm
 
-SYN-8  scripts/train_syn8_wang_adapted.py
-       scripts/submit_syn8_wang_full.sh
-       slurm/train_syn8_wang.slurm
-
-NFV    scripts/train_hard_ranking_v3_full.py
-       scripts/submit_hard_ranking_v3_full.sh
-       slurm/train_hard_ranking_v3_full.slurm
+NFV
+  engine:    src/training/nfv.py
+  CLI:       scripts/train_nfv.py
+  submit:    scripts/submit_nfv.sh
+  Slurm:     slurm/train_nfv.slurm
 ```
 
-SYN-3 and SYN-8 will be consolidated into a shared synthetic trainer in the next
-cleanup stage; this document deliberately records the current working entry
-points first.
+Typical URSA submissions are:
+
+```bash
+./scripts/submit_syn.sh syn3 full
+./scripts/submit_syn.sh syn8 full
+./scripts/submit_nfv.sh
+```
+
+For quick structural tests of the synthetic workflow:
+
+```bash
+./scripts/submit_syn.sh syn3 smoke
+./scripts/submit_syn.sh syn8 smoke
+```
+
+The shared SYN engine preserves the final SYN-3 and SYN-8 transformation
+families, severity mappings, target-distance objective, sampling seeds, and
+checkpoint metadata.  NFV is the final name for the experiment whose historical
+on-disk/checkpoint identifier remains `hard_ranking_v3_full_v1` for backward
+compatibility.
+
+Detailed experiment definitions:
+
+- `docs/syn_experiment.md`
+- `docs/nfv_experiment.md`
 
 ## 3. Primary diagnostics
 

@@ -1,53 +1,28 @@
 #!/usr/bin/env python3
-"""
-Train revised SYN-3: a Wang/CLPFV-adapted synthetic precipitation similarity model.
+"""Shared SYN-3 / SYN-8 synthetic-perturbation training engine.
 
-Scientific design
------------------
-This experiment deliberately keeps this project's GroupNorm ResNet-18,
-projection head, HRRR 256x256 patches, log1p-zscore preprocessing, optimizer,
-and one-full-anchor-epoch schedule, while adapting the synthetic supervision
-much more closely to the released Wang et al. CLPFV training code.
+Both final synthetic experiments use the same GroupNorm ResNet-18, projection
+head, HRRR 256x256 patches, log1p-zscore preprocessing, optimizer, deterministic
+one-anchor-epoch schedule, SupCon objective, and Wang-style target-distance
+penalty.  They differ only in the perturbation families exposed during
+training:
 
-Each underlying HRRR case contributes four views per visit:
-    O : original
-    D : one displacement perturbation
-    I : one intensity perturbation
-    A : one area-size perturbation
+SYN-3
+    displacement, intensity, area size
 
-For each perturbation independently:
-    severity rank r ~ Uniform{1,...,10}
-    direction      ~ {-1,+1}
+SYN-8
+    SYN-3 plus smoothing, object concentration/dispersion, principal-axis
+    deformation, rotation, and tile fragmentation.
 
-The physical bias mapping follows Wang's published/released levels:
-    displacement: +/- r grid cells
-    intensity decrease: 1 - 0.05*r  (0.95 ... 0.50)
-    intensity increase: 1 + 0.10*r  (1.10 ... 2.00)
-    area size: same factor ladder as intensity
+For every active perturbation family, severity rank r is sampled uniformly from
+1..10.  The target cosine distance is 0.009*r^2, equivalent to target cosine
+similarity 1 - 0.009*r^2.  The released Wang/CLPFV ladders are retained for
+its three published perturbation families.  The five added SYN-8 families use
+the project's final morphology-diagnostic severity mappings.
 
-The loss is
-    L = L_SupCon + penalty_weight * L_penalty
-
-where SupCon uses all four views of the same underlying HRRR field as one
-class, and all views from other active fields in the minibatch as negatives.
-The Wang-style custom penalty is computed only original-to-perturbation:
-
-    d_cos = 1 - cosine(z_original, z_perturbed)
-    d_target(r) = 0.009 * r^2
-    L_penalty = mean |d_cos - d_target|
-
-Thus the equivalent target cosine similarity is
-    s_target(r) = 1 - 0.009*r^2,
-which runs from 0.991 at rank 1 to 0.100 at rank 10.
-
-The default penalty weight is 1000, matching the released Wang training
-notebook's explicit multiplication of the custom loss by 1000.  Unlike the
-released notebook, we use a proper mean over valid original/perturbation pairs
-before applying that explicit weight.
-
-No separately sampled negative HRRR fields are needed: the other underlying
-cases in the SupCon minibatch are the negatives.  With batch_size=8 this is
-8 cases x 4 views = 32 physical model inputs per optimizer step.
+This module intentionally preserves the scientific behavior of the former
+``train_syn3_wang_adapted.py`` and ``train_syn8_wang_adapted.py`` scripts while
+removing their duplicated training implementation.
 """
 from __future__ import annotations
 
@@ -73,23 +48,95 @@ from torch.utils.data import Dataset, DataLoader
 from src.data import ContrastiveIndex, HRRRArchive, PrecipTransform
 from src.models.precip_resnet_gn import PrecipResNet18GN
 from src.eval.wang_transforms import displacement, intensity, area_size
+from src.eval.morphology_signed_transforms import (
+    smooth_or_sharpen,
+    signed_object_dispersion,
+    principal_axis_deform,
+    rotate,
+    signed_tile_fragment,
+)
 
 
 DEFAULT_GRID_SHAPE = (1059, 1799)
-FAMILIES = ("displacement", "intensity", "area_size")
-VIEWS_PER_CASE = 1 + len(FAMILIES)
 
 
-def defaults():
+@dataclass(frozen=True)
+class SyntheticExperimentSpec:
+    key: str
+    label: str
+    checkpoint_name: str
+    config_name: str
+    output_subdir: str
+    families: tuple[str, ...]
+    severity_description: str
+
+
+SYNTHETIC_EXPERIMENTS = {
+    "syn3": SyntheticExperimentSpec(
+        key="syn3",
+        label="SYN-3",
+        checkpoint_name="SYN-3 Wang-adapted v2",
+        config_name="SYN-3 Wang-adapted v2",
+        output_subdir="derived/experiments/synthetic_perturb_syn3_v2",
+        families=("displacement", "intensity", "area_size"),
+        severity_description="discrete ranks 1..10; random sign/direction",
+    ),
+    "syn8": SyntheticExperimentSpec(
+        key="syn8",
+        label="SYN-8",
+        checkpoint_name="SYN-8 Wang-adapted v2",
+        config_name="SYN-8 Wang-adapted v2 (smoothing-only training)",
+        output_subdir="derived/experiments/synthetic_perturb_syn8_v2",
+        families=(
+            "displacement",
+            "intensity",
+            "area_size",
+            "smoothing",
+            "object_dispersion_cells",
+            "principal_axis_log2_scale",
+            "rotation_deg",
+            "tile_fragmentation_cells",
+        ),
+        severity_description="discrete ranks 1..10; signed direction except smoothing",
+    ),
+}
+
+# Set by configure_experiment() before sampling/training begins.  Keeping these
+# as module globals lets the shared implementation remain mechanically close to
+# the two already-validated final training scripts.
+ACTIVE_SPEC: SyntheticExperimentSpec | None = None
+FAMILIES: tuple[str, ...] = ()
+VIEWS_PER_CASE = 0
+
+
+def configure_experiment(key: str) -> SyntheticExperimentSpec:
+    global ACTIVE_SPEC, FAMILIES, VIEWS_PER_CASE
+    try:
+        spec = SYNTHETIC_EXPERIMENTS[str(key).lower()]
+    except KeyError as exc:
+        allowed = ", ".join(sorted(SYNTHETIC_EXPERIMENTS))
+        raise ValueError(f"Unknown synthetic experiment {key!r}; choose {allowed}") from exc
+    ACTIVE_SPEC = spec
+    FAMILIES = spec.families
+    VIEWS_PER_CASE = 1 + len(FAMILIES)
+    return spec
+
+
+def require_spec() -> SyntheticExperimentSpec:
+    if ACTIVE_SPEC is None:
+        raise RuntimeError("Synthetic experiment has not been configured")
+    return ACTIVE_SPEC
+
+
+def defaults(spec: SyntheticExperimentSpec):
     data = Path(os.environ["DATA_DIR"])
     return {
         "anchors": data / "metadata/dataset_v1/eligible_anchors_v1.csv.gz",
         "negative_pool": data / "metadata/dataset_v1/negative_pool_v1.csv.gz",
         "manifest": data / "forecasts/hrrr/qpf6_native/metadata/hrrr_qpf6_manifest.csv.gz",
         "stats": data / "metadata/dataset_v1/precip_normalization_stats_v1.json",
-        "output_dir": data / "derived/experiments/synthetic_perturb_syn3_v2",
+        "output_dir": data / spec.output_subdir,
     }
-
 
 def seed_everything(seed: int) -> None:
     random.seed(seed)
@@ -128,7 +175,7 @@ def loader_kwargs(dataset, sampler, workers, pin_memory, prefetch_factor):
     kw = dict(
         dataset=dataset,
         batch_sampler=sampler,
-        collate_fn=syn3_collate,
+        collate_fn=synthetic_collate,
         num_workers=workers,
         pin_memory=pin_memory,
     )
@@ -143,50 +190,82 @@ def rank_to_target_distance(rank: torch.Tensor | np.ndarray | int | float):
     return 0.009 * (rank ** 2)
 
 
-def wang_bias(family: str, rank: int, direction: int) -> float:
-    """Map discrete severity rank 1..10 and direction +/-1 to a physical bias."""
+def synthetic_bias(family: str, rank: int, direction: int) -> float:
+    """Map rank 1..10 and signed direction to each family's physical bias.
+
+    The three Wang families use the released CLPFV ladders exactly.  The five
+    added morphology families use rank/10 of the same signed maximum magnitude
+    used in this project's morphology diagnostics.  Integer-cell transforms
+    are rounded to the nearest nonzero cell.
+    """
     r = int(rank)
-    s = int(direction)
+    sgn = int(direction)
     if not (1 <= r <= 10):
         raise ValueError(f"rank must be in 1..10; got {rank}")
-    if s not in (-1, 1):
+    if sgn not in (-1, 1):
         raise ValueError(f"direction must be +/-1; got {direction}")
 
     if family == "displacement":
-        return float(s * r)
+        return float(sgn * r)
     if family in ("intensity", "area_size"):
-        # Exact released Wang ladder:
-        # lower side .95,.90,...,.50; upper side 1.10,1.20,...,2.00.
-        return float(1.0 - 0.05 * r) if s < 0 else float(1.0 + 0.10 * r)
+        return float(1.0 - 0.05 * r) if sgn < 0 else float(1.0 + 0.10 * r)
+    if family == "smoothing":
+        # Smoothing is intentionally one-sided. Sharpening is retained only
+        # as an out-of-sample morphology diagnostic because the two operators
+        # are not mathematical inverses and empirically show asymmetric skill.
+        return float(0.6 * r)              # +6 sigma at rank 10
+    if family == "object_dispersion_cells":
+        mag = max(1, int(np.rint(1.6 * r)))  # +/-16 cells at rank 10
+        return float(sgn * mag)
+    if family == "principal_axis_log2_scale":
+        return float(sgn * 0.1 * r)        # +/-1 log2 scale at rank 10
+    if family == "rotation_deg":
+        return float(sgn * 9.0 * r)        # +/-90 deg at rank 10
+    if family == "tile_fragmentation_cells":
+        mag = max(1, int(np.rint(1.2 * r)))  # +/-12 cells at rank 10
+        return float(sgn * mag)
     raise KeyError(family)
 
 
-def apply_transform(field: np.ndarray, family: str, bias: float) -> np.ndarray:
+def apply_transform(field: np.ndarray, family: str, bias: float, case_seed: int) -> np.ndarray:
     if family == "displacement":
         return displacement(field, int(round(bias)))
     if family == "intensity":
         return intensity(field, float(bias))
     if family == "area_size":
         return area_size(field, float(bias))
+    if family == "smoothing":
+        if bias <= 0:
+            raise ValueError(f"smoothing bias must be positive; got {bias}")
+        return smooth_or_sharpen(field, float(bias))
+    if family == "object_dispersion_cells":
+        return signed_object_dispersion(field, float(bias), seed=int(case_seed))
+    if family == "principal_axis_log2_scale":
+        return principal_axis_deform(field, float(bias))
+    if family == "rotation_deg":
+        return rotate(field, float(bias))
+    if family == "tile_fragmentation_cells":
+        return signed_tile_fragment(field, float(bias), seed=int(case_seed))
     raise KeyError(family)
 
 
 @dataclass(frozen=True)
-class Syn3Recipe:
+class SyntheticRecipe:
     anchor_id: str
     y0: int
     x0: int
     patch_size: int
-    ranks: tuple[int, int, int]
-    directions: tuple[int, int, int]
-    biases: tuple[float, float, float]
+    ranks: tuple[int, ...]
+    directions: tuple[int, ...]
+    biases: tuple[float, ...]
+    transform_seeds: tuple[int, ...]
     split: str
     anchor_valid_time: str
     anchor_forecast_hour: int
     epoch: int
 
 
-class Syn3BatchSampler:
+class SyntheticBatchSampler:
     """Deterministic one-epoch sampler of anchors, crops, ranks, and directions."""
 
     def __init__(
@@ -227,7 +306,7 @@ class Syn3BatchSampler:
         n = len(self._anchors)
         return n // self.batch_size if self.drop_last else math.ceil(n / self.batch_size)
 
-    def _recipe(self, row) -> Syn3Recipe:
+    def _recipe(self, row) -> SyntheticRecipe:
         aid = str(row["anchor_id"])
         rng = _rng_for(self.seed, self.epoch, 101, aid)
         ny, nx = self.grid_shape
@@ -237,15 +316,19 @@ class Syn3BatchSampler:
         ranks = []
         directions = []
         biases = []
+        transform_seeds = []
         for family in FAMILIES:
             frng = _rng_for(self.seed, self.epoch, 103, f"{aid}|{family}")
             rank = int(frng.integers(1, 11))
-            direction = -1 if int(frng.integers(0, 2)) == 0 else 1
+            # Smoothing is one-sided by design. All other signed transforms
+            # retain independently sampled negative/positive directions.
+            direction = 1 if family == "smoothing" else (-1 if int(frng.integers(0, 2)) == 0 else 1)
             ranks.append(rank)
             directions.append(direction)
-            biases.append(wang_bias(family, rank, direction))
+            biases.append(synthetic_bias(family, rank, direction))
+            transform_seeds.append(_stable_u32(f"{self.seed}|{self.epoch}|{aid}|{family}|transform"))
 
-        return Syn3Recipe(
+        return SyntheticRecipe(
             anchor_id=aid,
             y0=y0,
             x0=x0,
@@ -253,13 +336,14 @@ class Syn3BatchSampler:
             ranks=tuple(ranks),
             directions=tuple(directions),
             biases=tuple(biases),
+            transform_seeds=tuple(transform_seeds),
             split=str(row["split"]),
             anchor_valid_time=str(row["valid_time"]),
             anchor_forecast_hour=int(row["forecast_hour"]),
             epoch=self.epoch,
         )
 
-    def __iter__(self) -> Iterator[list[Syn3Recipe]]:
+    def __iter__(self) -> Iterator[list[SyntheticRecipe]]:
         rng = _rng_for(self.seed, self.epoch, 97, "anchor_order")
         order = rng.permutation(len(self._anchors))
         for start in range(0, len(order), self.batch_size):
@@ -269,7 +353,7 @@ class Syn3BatchSampler:
             yield [self._recipe(self._anchors.iloc[int(i)]) for i in idxs]
 
 
-class Syn3Dataset(Dataset):
+class SyntheticDataset(Dataset):
     def __init__(
         self,
         archive: HRRRArchive,
@@ -286,9 +370,9 @@ class Syn3Dataset(Dataset):
     def __len__(self):
         return self.archive.n_fields
 
-    def __getitem__(self, recipe: Syn3Recipe):
-        if not isinstance(recipe, Syn3Recipe):
-            raise TypeError("Syn3Dataset expects Syn3Recipe indices")
+    def __getitem__(self, recipe: SyntheticRecipe):
+        if not isinstance(recipe, SyntheticRecipe):
+            raise TypeError("SyntheticDataset expects SyntheticRecipe indices")
 
         raw = np.asarray(
             self.archive.read_patch(
@@ -301,8 +385,8 @@ class Syn3Dataset(Dataset):
 
         transformed = []
         pair_mask = []
-        for family, bias in zip(FAMILIES, recipe.biases):
-            p_raw = np.asarray(apply_transform(raw, family, bias), dtype=np.float32)
+        for family, bias, case_seed in zip(FAMILIES, recipe.biases, recipe.transform_seeds):
+            p_raw = np.asarray(apply_transform(raw, family, bias, case_seed), dtype=np.float32)
             changed = not _array_equal(raw, p_raw)
             transformed.append(self.transform(p_raw))
             pair_mask.append(bool(active_case and changed))
@@ -311,8 +395,14 @@ class Syn3Dataset(Dataset):
         ranks = torch.tensor(recipe.ranks, dtype=torch.float32)
         target_distances = 0.009 * ranks.pow(2)
 
+        metadata = asdict(recipe)
+        if require_spec().key == "syn3":
+            # Preserve the historical SYN-3 validation-recipe schema so an
+            # existing final checkpoint/run can still be resumed exactly.
+            metadata.pop("transform_seeds", None)
+
         return {
-            "views": views,  # [4,1,H,W] original first
+            "views": views,  # [B-independent V,1,H,W], original first
             "active_case": torch.tensor(active_case, dtype=torch.bool),
             "pair_mask": torch.tensor(pair_mask, dtype=torch.bool),
             "ranks": ranks,
@@ -320,11 +410,11 @@ class Syn3Dataset(Dataset):
             "biases": torch.tensor(recipe.biases, dtype=torch.float32),
             "target_distances": target_distances,
             "anchor_wet_fraction": torch.tensor(wet_fraction, dtype=torch.float32),
-            "metadata": asdict(recipe),
+            "metadata": metadata,
         }
 
 
-def syn3_collate(items):
+def synthetic_collate(items):
     if not items:
         raise ValueError("Cannot collate an empty batch")
     tensor_keys = (
@@ -362,7 +452,7 @@ def encode_views(model, batch, use_amp: bool):
 
 
 def supervised_contrastive_loss(z: torch.Tensor, active_case: torch.Tensor, temperature: float):
-    """Standard multi-positive SupCon over active cases and all 4 views/case."""
+    """Standard multi-positive SupCon over active cases and all 9 views/case."""
     active_idx = torch.where(active_case.bool())[0]
     if len(active_idx) < 2:
         zero = z.sum() * 0.0
@@ -391,7 +481,7 @@ def supervised_contrastive_loss(z: torch.Tensor, active_case: torch.Tensor, temp
     return loss, {"active_views": int(A * V), "retrieval_top1_pct": top1.detach()}
 
 
-def syn3_objective(z, batch, *, temperature: float, penalty_weight: float, supcon_weight: float):
+def synthetic_objective(z, batch, *, temperature: float, penalty_weight: float, supcon_weight: float):
     B, V, D = z.shape
     if V != VIEWS_PER_CASE:
         raise RuntimeError(f"Expected {VIEWS_PER_CASE} views/case; got {V}")
@@ -554,7 +644,7 @@ def evaluate_cached(model, cached_validation, device, use_amp, args):
     for cpu_batch in cached_validation:
         batch = move_batch(cpu_batch, device)
         z = encode_views(model, batch, use_amp)
-        _, metrics = syn3_objective(
+        _, metrics = synthetic_objective(
             z, batch,
             temperature=args.temperature,
             penalty_weight=args.penalty_weight,
@@ -606,7 +696,7 @@ def save_checkpoint(path, *, model, optimizer, step, args, best_val, full_epoch_
                 "stats_json": str(args.stats_json),
             },
             "experiment": {
-                "name": "SYN-3 Wang-adapted v2",
+                "name": require_spec().checkpoint_name,
                 "transforms": list(FAMILIES),
                 "severity": "discrete ranks 1..10",
                 "target_cosine_distance": "0.009 * rank^2",
@@ -677,18 +767,34 @@ def row_from_metrics(step, lr, total, metrics, data_wait=None, compute_sec=None)
     return row
 
 
-def main():
-    d = defaults()
-    p = argparse.ArgumentParser()
+def main(argv=None):
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--experiment", choices=sorted(SYNTHETIC_EXPERIMENTS))
+    known, _ = bootstrap.parse_known_args(argv)
+    # Use SYN-3 only to populate help/default path text when --experiment has
+    # not yet been supplied. The full parser below still requires the option.
+    spec = configure_experiment(known.experiment or "syn3")
+    d = defaults(spec)
+
+    p = argparse.ArgumentParser(
+        description="Train the final SYN-3 or SYN-8 precipitation similarity experiment."
+    )
+    p.add_argument("--experiment", choices=sorted(SYNTHETIC_EXPERIMENTS), required=True)
     p.add_argument("--anchors", default=str(d["anchors"]))
-    p.add_argument("--negative-pool", default=str(d["negative_pool"]), help="Loaded only because ContrastiveIndex uses the existing project metadata API; no sampled negatives are used in SYN-3.")
+    p.add_argument(
+        "--negative-pool", default=str(d["negative_pool"]),
+        help="Loaded only because ContrastiveIndex uses the existing metadata API; synthetic training uses in-batch negatives.",
+    )
     p.add_argument("--manifest", default=str(d["manifest"]))
     p.add_argument("--stats-json", default=str(d["stats"]))
     p.add_argument("--output-dir", default=str(d["output_dir"]))
     p.add_argument("--resume-checkpoint", default=None)
     p.add_argument("--end-step", type=int, default=None)
 
-    p.add_argument("--batch-size", type=int, default=8, help="Underlying HRRR cases per optimizer step. Physical inputs = 4x this value.")
+    p.add_argument(
+        "--batch-size", type=int, default=8,
+        help=f"Underlying HRRR cases per optimizer step. Physical inputs = {VIEWS_PER_CASE}x this value.",
+    )
     p.add_argument("--patch-size", type=int, default=256)
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--prefetch-factor", type=int, default=2)
@@ -716,7 +822,9 @@ def main():
     p.add_argument("--seed", type=int, default=20261014)
     p.add_argument("--validation-seed", type=int, default=20261015)
     p.add_argument("--no-amp", action="store_true")
-    args = p.parse_args()
+    args = p.parse_args(argv)
+    if args.experiment != spec.key:
+        raise RuntimeError("Synthetic experiment changed while parsing arguments")
 
     if args.batch_size < 2:
         raise SystemExit("--batch-size must be >=2")
@@ -749,12 +857,12 @@ def main():
     index = ContrastiveIndex(args.anchors, args.negative_pool, args.manifest)
     precip_transform = PrecipTransform.from_stats_json("log1p_zscore", args.stats_json)
 
-    train_sampler = Syn3BatchSampler(
+    train_sampler = SyntheticBatchSampler(
         index, split="train", batch_size=args.batch_size, patch_size=args.patch_size,
         seed=args.seed,
     )
     train_sampler.set_epoch(0)
-    val_sampler = Syn3BatchSampler(
+    val_sampler = SyntheticBatchSampler(
         index, split="validation", batch_size=args.batch_size, patch_size=args.patch_size,
         seed=args.validation_seed,
     )
@@ -768,12 +876,12 @@ def main():
     warmup_steps = max(1, int(round(full_epoch_steps * args.warmup_fraction)))
 
     print("=" * 100)
-    print("REVISED SYN-3 / WANG-ADAPTED GROUPNORM TRAINING")
+    print(f"{spec.label} / SHARED SYNTHETIC GROUPNORM TRAINING")
     print("=" * 100)
     print(f"GPU                       : {torch.cuda.get_device_name(0)}")
     print(f"Output                    : {outdir}")
     print(f"Transforms                : {', '.join(FAMILIES)}")
-    print("Severity                  : discrete ranks 1..10; random sign/direction")
+    print(f"Severity                  : {spec.severity_description}")
     print("Target cosine distance    : 0.009 * rank^2")
     print("Equivalent similarity     : 1 - 0.009 * rank^2 (0.991 -> 0.100)")
     print(f"Underlying cases / step   : {args.batch_size}")
@@ -791,7 +899,7 @@ def main():
 
     config = {
         **vars(args),
-        "experiment_name": "SYN-3 Wang-adapted v2",
+        "experiment_name": spec.config_name,
         "families": list(FAMILIES),
         "views_per_case": VIEWS_PER_CASE,
         "physical_fields_per_step": args.batch_size * VIEWS_PER_CASE,
@@ -802,6 +910,18 @@ def main():
         "n_train_anchors": n_train_anchors,
         "warmup_steps": warmup_steps,
     }
+    if spec.key == "syn8":
+        # Preserve the metadata emitted by the validated final SYN-8 run.
+        config["rank_to_bias"] = {
+            "displacement": "+/- rank cells",
+            "intensity": "lower=1-0.05*rank; upper=1+0.10*rank",
+            "area_size": "lower=1-0.05*rank; upper=1+0.10*rank",
+            "smoothing": "+0.6*rank sigma (one-sided; sharpening diagnostic-only)",
+            "object_dispersion_cells": "+/-round(1.6*rank) cells",
+            "principal_axis_log2_scale": "+/-0.1*rank",
+            "rotation_deg": "+/-9*rank degrees",
+            "tile_fragmentation_cells": "+/-round(1.2*rank) cells",
+        }
     if config_path.exists():
         old = json.loads(config_path.read_text())
         # Resume is intentionally strict about the scientific definition.
@@ -813,7 +933,7 @@ def main():
 
     # Fixed validation cache.
     val_archive = HRRRArchive(args.manifest)
-    val_dataset = Syn3Dataset(
+    val_dataset = SyntheticDataset(
         val_archive, transform=precip_transform,
         wet_threshold_mm=args.wet_threshold_mm,
         min_anchor_wet_fraction=args.min_anchor_wet_fraction,
@@ -905,7 +1025,7 @@ def main():
         write_csv(val_hist_path, val_rows)
 
     train_archive = HRRRArchive(args.manifest)
-    train_dataset = Syn3Dataset(
+    train_dataset = SyntheticDataset(
         train_archive, transform=precip_transform,
         wet_threshold_mm=args.wet_threshold_mm,
         min_anchor_wet_fraction=args.min_anchor_wet_fraction,
@@ -949,7 +1069,7 @@ def main():
             model.train()
             optimizer.zero_grad(set_to_none=True)
             z = encode_views(model, batch, use_amp)
-            total, metrics = syn3_objective(
+            total, metrics = synthetic_objective(
                 z, batch,
                 temperature=args.temperature,
                 penalty_weight=args.penalty_weight,
@@ -1030,7 +1150,7 @@ def main():
 
     elapsed = time.perf_counter() - run_start
     summary = {
-        "experiment": "SYN-3 Wang-adapted v2",
+        "experiment": spec.checkpoint_name,
         "best_validation": best_val,
         "full_epoch_steps": full_epoch_steps,
         "target_end_step": target_end_step,

@@ -18,6 +18,7 @@ dependencies:
   - cartopy>=0.25,<0.26
   - pyyaml>=6,<7
   - tqdm>=4.70,<5
+  - pytest>=8,<10
   - pip:
       # The completed experiments used the CUDA 12.8 PyTorch build on URSA.
       # PyPI resolves the associated NVIDIA CUDA runtime packages.

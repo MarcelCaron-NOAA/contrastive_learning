@@ -13,3 +13,4 @@ PyYAML>=6,<7
 tqdm>=4.70,<5
 torch==2.11.0
 torchvision==0.26.0
+pytest>=8,<10

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Train V3 from scratch on the joint natural hard-ranking objective.
+Train the final Natural Forecast Variability (NFV) model from scratch.
+
+NFV is the final name for the experiment historically stored on disk as
+``hard_ranking_v3_full_v1``.  The legacy experiment identifier is intentionally
+retained in checkpoints so existing final checkpoints remain resume-compatible.
 
 For each anchor A, the sampler supplies:
   A, P/TL1, TL3, TL6, E1, E2, E3, E6, N1, N2, N3, N4
@@ -54,6 +58,10 @@ from src.data.hard_ranking_sampler import (
 from src.models.precip_resnet_gn import PrecipResNet18GN
 from src.training.contrastive_loss import SymmetricExplicitInfoNCE
 from src.training.ordered_ranking_loss import OrderedSimilarityRankingLoss
+
+
+EXPERIMENT_ID = "hard_ranking_v3_full_v1"
+MODEL_LABEL = "NFV"
 
 
 TL_PAIR_LABELS = ("p_gt_tl3", "p_gt_tl6", "tl3_gt_tl6")
@@ -412,7 +420,7 @@ def save_checkpoint(
     torch.save(
         {
             "checkpoint_schema_version": 1,
-            "experiment": "hard_ranking_v3_full_v1",
+            "experiment": EXPERIMENT_ID,
             "step": int(step),
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
@@ -580,7 +588,7 @@ def main():
         )
 
     print("=" * 96)
-    print("HARD-RANKING GROUPNORM V3 FULL RUN (FROM SCRATCH)")
+    print("NFV / NATURAL FORECAST VARIABILITY TRAINING")
     print("=" * 96)
     print(f"GPU                     : {torch.cuda.get_device_name(0)}")
     print(f"AMP forward             : {'bf16' if use_amp else 'off'}")
@@ -650,7 +658,7 @@ def main():
     if warmup_steps >= full_epoch_steps:
         raise RuntimeError("Warmup consumes the complete epoch; reduce --warmup-fraction.")
 
-    print(f"Full V3 anchor epoch        : {hard_eligible_anchors:,} anchors in {full_epoch_steps:,} batches")
+    print(f"Full NFV anchor epoch       : {hard_eligible_anchors:,} anchors in {full_epoch_steps:,} batches")
     print(f"Target end step             : {target_end_step:,}")
     print("LR schedule reference       : complete hard-ranking epoch (never compressed)")
     print(f"Warmup steps                : {warmup_steps:,}")
@@ -738,9 +746,9 @@ def main():
     if args.resume_checkpoint:
         resume_path = Path(args.resume_checkpoint)
         ckpt = torch.load(resume_path, map_location="cpu")
-        if ckpt.get("experiment") != "hard_ranking_v3_full_v1":
+        if ckpt.get("experiment") != EXPERIMENT_ID:
             raise RuntimeError(
-                "Resume checkpoint is not a hard_ranking_v3_full_v1 checkpoint"
+                f"Resume checkpoint is not compatible with NFV ({EXPERIMENT_ID})"
             )
         model.load_state_dict(ckpt["model_state_dict"], strict=True)
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
@@ -759,7 +767,7 @@ def main():
             raise RuntimeError("Resume checkpoint full-epoch length differs from current sampler")
         if int(sampling_meta.get("hard_eligible_anchors", hard_eligible_anchors)) != hard_eligible_anchors:
             raise RuntimeError("Resume checkpoint hard-eligible anchor count differs")
-        print(f"Resuming V3 checkpoint     : {resume_path} at step {start_step:,}")
+        print(f"Resuming NFV checkpoint    : {resume_path} at step {start_step:,}")
     else:
         print("Model weights               : FRESH random initialization")
         print("AdamW optimizer state       : FRESH")
@@ -767,7 +775,8 @@ def main():
     # Preserve canonical config for GitHub/reproducibility.
     if not config_path.exists():
         config = dict(vars(args))
-        config["experiment"] = "hard_ranking_v3_full_v1"
+        config["experiment"] = EXPERIMENT_ID
+        config["model_label"] = MODEL_LABEL
         config["initialization"] = "fresh_random_groupnorm"
         config["hard_eligible_anchors"] = hard_eligible_anchors
         config["full_epoch_steps"] = full_epoch_steps
@@ -942,7 +951,7 @@ def main():
                         full_epoch_steps=full_epoch_steps, warmup_steps=warmup_steps,
                         hard_eligible_anchors=hard_eligible_anchors,
                     )
-                    print(f"  NEW BEST composite validation objective at V3 step {step}")
+                    print(f"  NEW BEST composite validation objective at NFV step {step}")
 
                 write_csv(val_hist_path, val_rows)
 
@@ -972,8 +981,9 @@ def main():
 
     elapsed = time.perf_counter() - run_start
     summary = {
-        "experiment": "hard_ranking_v3_full_v1",
-        "initialization": "fresh_random_groupnorm" if start_step == 0 else "resumed_v3",
+        "experiment": EXPERIMENT_ID,
+        "model_label": MODEL_LABEL,
+        "initialization": "fresh_random_groupnorm" if start_step == 0 else "resumed_nfv",
         "hard_eligible_anchors": hard_eligible_anchors,
         "full_epoch_steps": full_epoch_steps,
         "target_end_step": target_end_step,
@@ -1009,7 +1019,7 @@ def main():
     print("=" * 96)
     print("RUN COMPLETE")
     print("=" * 96)
-    print(f"Best validation composite : {best_val['loss']:.6f} at V3 step {best_val['step']}")
+    print(f"Best validation composite : {best_val['loss']:.6f} at NFV step {best_val['step']}")
     print(f"Mean data wait / step     : {summary['mean_data_wait_seconds_per_step']:.3f}s")
     print(f"Mean GPU compute / step   : {summary['mean_gpu_compute_seconds_per_step']:.3f}s")
     print(f"Output                    : {outdir}")

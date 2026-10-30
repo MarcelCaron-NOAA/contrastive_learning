@@ -94,9 +94,18 @@ for rebuilding the canonical HRRR archive when source data are available.
 
 ### 4. Reproduce experiments
 
-The final one-command reproduction interface is being introduced during the
-current cleanup. Until then, the canonical training/evaluation entry points are
-listed in [`docs/REPRODUCING_RESULTS.md`](docs/REPRODUCING_RESULTS.md).
+Training has now been consolidated to three clear model entry points:
+
+```bash
+./scripts/submit_syn.sh syn3 full
+./scripts/submit_syn.sh syn8 full
+./scripts/submit_nfv.sh
+```
+
+Use `smoke` instead of `full` for a short SYN test.  The canonical evaluation
+entry points are listed in [`docs/REPRODUCING_RESULTS.md`](docs/REPRODUCING_RESULTS.md).
+A final top-level reproduction driver will be added after the diagnostics are
+consolidated.
 
 ## Repository layout
 
@@ -108,7 +117,7 @@ slurm/         URSA Slurm launchers (being consolidated)
 src/data/      HRRR archive readers, preprocessing, and sampling
 src/eval/      Controlled transforms and traditional verification metrics
 src/models/    GroupNorm precipitation encoders and checkpoint loading
-src/training/  Contrastive and ranking losses
+src/training/  Shared SYN/NFV training engines plus contrastive/ranking losses
 tests/         Lightweight automated tests
 ```
 

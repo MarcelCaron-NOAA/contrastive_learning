@@ -1,210 +1,166 @@
-REVISED SYN-3 / WANG-ADAPTED V2
-===============================
+# Final synthetic-supervision experiments: SYN-3 and SYN-8
 
-Purpose
--------
-Replace the first SYN-3 formulation with a more faithful adaptation of the
-released Wang/CLPFV synthetic supervision while retaining this project's
-GroupNorm ResNet-18, projection head, HRRR patches, log1p-zscore preprocessing,
-and optimizer/LR infrastructure.
+SYN-3 and SYN-8 share one training engine:
 
-Core objective
---------------
-Views per underlying HRRR case:
-  original + displacement + intensity + area-size = 4
+```text
+src/training/synthetic.py
+scripts/train_syn.py
+scripts/submit_syn.sh
+slurm/train_syn.slurm
+```
 
-Batch default:
-  8 underlying cases x 4 views = 32 physical model inputs / step
+The two experiments intentionally differ only in the perturbation families used
+for supervision.  Architecture, HRRR patches, preprocessing, optimizer,
+training schedule, SupCon formulation, target-distance penalty, seeds, and
+validation design are shared.
 
-Discrete severity:
-  rank r = 1..10, random direction for each transform independently.
+## Shared model and objective
 
-Wang target:
-  cosine distance target = 0.009 * r^2
-  equivalent cosine similarity = 1 - 0.009 * r^2
+```text
+encoder                 GroupNorm ResNet-18
+projection head         512 hidden -> 128 output
+input                    256 x 256 HRRR QPF6 patches
+preprocessing            log1p z-score
+optimizer                AdamW
+batch                    8 underlying HRRR cases
+SupCon temperature       0.10
+SupCon weight            1.0
+penalty weight           1000.0
+peak learning rate       3e-4
+warmup start             3e-5
+warmup fraction          0.05 of the full deterministic anchor epoch
+minimum learning rate    3e-6
+weight decay             1e-4
+```
 
-Loss:
-  total = SupCon + 1000 * mean_abs_error(cosine_distance, target_distance)
+For each active perturbation family, severity rank is sampled independently:
 
-SupCon:
-  all 4 views of the same underlying HRRR case share a class label;
-  all views of the other underlying cases in the minibatch are negatives.
+```text
+r ~ Uniform{1,...,10}
+```
 
-FIRST RUN A 10-STEP SMOKE TEST
-------------------------------
-From the repo root:
+The Wang-style target cosine distance is:
 
-  chmod +x scripts/submit_syn3_wang_smoke.sh scripts/submit_syn3_wang_full.sh
-  ./scripts/submit_syn3_wang_smoke.sh
+```text
+d_target(r) = 0.009 * r^2
+S_target(r) = 1 - 0.009 * r^2
+```
 
-Expected header includes:
-  Target cosine distance    : 0.009 * rank^2
-  Equivalent similarity     : 1 - 0.009 * rank^2 (0.991 -> 0.100)
-  Underlying cases / step   : 8
-  Views / case              : 4
-  Physical fields / step    : 32
-  Global objective          : SupCon, temperature=0.1
-  Loss weights              : SupCon=1, penalty=1000
-  Full deterministic epoch  : ~45,646 steps
-  Target end step           : 10
+so target similarity runs from 0.991 at rank 1 to 0.100 at rank 10.
 
-The smoke log should report, e.g.:
-  SupCon=<raw>
-  P=<raw penalty MAE> x1000=<weighted contribution>
-  d=<mean cosine distance>
-  target_d=<mean Wang target distance>
-  retrieval=<same-case nearest-neighbor top1>
+The total objective is:
 
-It also reports per-transform rank, similarity, distance, target distance, and
-MAE at validation.
+```text
+L = L_SupCon + 1000 * mean(|d_cos - d_target|)
+```
 
-FULL RUN
---------
-Only after the smoke test looks numerically sane:
+Other underlying HRRR cases in the minibatch provide the SupCon negatives; no
+separate negative fields are sampled for these experiments.
 
-  ./scripts/submit_syn3_wang_full.sh
+## SYN-3
 
-Default run directory:
-  $DATA_DIR/derived/experiments/synthetic_perturb_syn3_v2
+Four views per underlying case:
 
-Default walltime:
-  05:00:00
+```text
+original
++ displacement
++ intensity
++ area size
+```
 
-To request a different walltime without editing the Slurm file:
+Physical rank mappings:
 
-  WALLTIME=06:00:00 ./scripts/submit_syn3_wang_full.sh
+```text
+displacement   +/- r grid cells
+intensity      lower = 1 - 0.05*r; upper = 1 + 0.10*r
+area size      same ladder as intensity
+```
 
-RESUME
-------
-The full trainer writes checkpoint_best.pt, checkpoint_last.pt, and periodic
-checkpoint_step*.pt files. To resume into the same run directory:
+These are the three perturbation definitions adapted from Wang et al. (2026).
+With the default batch size, SYN-3 processes 8 x 4 = 32 physical fields per
+optimizer step.
 
-  RUN_NAME=synthetic_perturb_syn3_v2 \
-  RESUME_CHECKPOINT="$DATA_DIR/derived/experiments/synthetic_perturb_syn3_v2/checkpoint_last.pt" \
-  ./scripts/submit_syn3_wang_full.sh
+### Submit
 
-NOTES
------
-- This intentionally does NOT reproduce Wang's pretrained BatchNorm ResNet18,
-  raw-precipitation input, unused projection head, tiny 69x73 grids, or hundreds
-  of short epochs.
-- It DOES reproduce the key released-code synthetic supervision we decided to
-  adopt: SupCon, discrete ranks 1..10, cosine-distance quadratic 0.009*r^2,
-  and nominal x1000 penalty weighting.
-- The custom penalty is a proper mean over valid original/perturbation pairs
-  before x1000, rather than reproducing the released notebook's peculiar
-  group-size-only divisor.
-- Dry sampled patches are excluded from SupCon/penalty through the existing wet
-  mask; this prevents identical all-zero transforms from becoming contradictory
-  supervision.
+Smoke test:
 
-REVISED SYN-8 / WANG-ADAPTED PIPELINE
-=====================================
+```bash
+./scripts/submit_syn.sh syn3 smoke
+```
 
-Purpose
--------
-This is the eight-transformation extension of revised SYN-3.  It keeps the
-same GroupNorm ResNet-18, projection head, HRRR preprocessing, optimizer,
-SupCon global loss, Wang cosine-distance target, x1000 penalty weight,
-training/validation split, and one-full-anchor-epoch schedule.
+Full run:
 
-The only scientific extension is adding five perturbation families:
-  smoothing
-  object_dispersion_cells
-  principal_axis_log2_scale
-  rotation_deg
-  tile_fragmentation_cells
+```bash
+./scripts/submit_syn.sh syn3 full
+```
 
-All eight families use discrete severity ranks 1..10 and the SAME target:
-  target cosine distance = 0.009 * rank^2
-  target similarity      = 1 - 0.009 * rank^2
+Default output:
 
-Physical rank mappings
-----------------------
-Wang three (exact released-code ladders):
-  displacement: +/- rank cells
-  intensity: lower 1-0.05*rank, upper 1+0.10*rank
-  area size: same ladder as intensity
+```text
+$DATA_DIR/derived/experiments/synthetic_perturb_syn3_v2
+```
 
-Five added families (rank/10 of the previous diagnostic maximum magnitude):
-  smoothing:             +0.6*rank sigma         -> +6 at rank 10
-                         (one-sided in training; sharpening remains diagnostic-only)
-  object dispersion:    +/-round(1.6*rank) cells -> +/-16 at rank 10
-  principal axis:       +/-0.1*rank log2 scale -> +/-1 at rank 10
-  rotation:             +/-9*rank degrees      -> +/-90 at rank 10
-  tile fragmentation:   +/-round(1.2*rank) cells -> +/-12 at rank 10
+## SYN-8
 
-Why smoothing is one-sided
---------------------------
-Sharpening and Gaussian smoothing are diagnostic counterparts, not mathematical
-inverses. Previous morphology tests showed a strong, repeatable asymmetry across
-traditional metrics, NFV, SYN-3, and SYN-8-v1: sharpening was tolerated much
-more than smoothing. Therefore revised SYN-8 does NOT force equal quadratic
-penalties onto +/- sigma. Only positive-sigma Gaussian smoothing is supervised.
-Sharpening should still be evaluated later on the full signed morphology axis as
-an out-of-sample response.
+Nine views per underlying case: the original plus eight perturbation families.
+SYN-8 contains all three SYN-3 families and adds:
 
-Batching
---------
-8 underlying HRRR cases per step by default.
-Each case has 9 views: original + one view from each of 8 transformations.
-Thus 72 physical fields per optimizer step.
-All nine views of a case share a SupCon class; views of the other seven cases
-serve as negatives.  The Wang penalty is only original-to-perturbed.
+```text
+smoothing
+object concentration/dispersion
+principal-axis deformation
+rotation
+tile fragmentation
+```
 
-For the three transformations shared with SYN-3, the sampler intentionally
-uses the same seed and per-family random stream as revised SYN-3.  Therefore,
-for the same anchor/epoch, crop, rank, and direction are matched between
-SYN-3 and SYN-8.  This makes their comparison cleaner.
+Additional physical mappings:
 
-Smoke test
-----------
-  ./scripts/submit_syn8_wang_smoke.sh
+```text
+smoothing                    +0.6*r sigma (one-sided)
+object dispersion            +/-round(1.6*r) cells
+principal-axis deformation   +/-0.1*r log2 scale
+rotation                     +/-9*r degrees
+tile fragmentation           +/-round(1.2*r) cells
+```
 
-Defaults:
-  RUN_NAME=synthetic_perturb_syn8_v2_smoke
-  END_STEP=10
-  WALLTIME=00:45:00
+Smoothing is intentionally one-sided during training. Sharpening remains an
+out-of-sample morphology diagnostic rather than being forced onto a symmetric
+training target.
 
-Full run
---------
-  ./scripts/submit_syn8_wang_full.sh
+With the default batch size, SYN-8 processes 8 x 9 = 72 physical fields per
+optimizer step.
 
-Defaults:
-  RUN_NAME=synthetic_perturb_syn8_v2
-  WALLTIME=12:00:00
+### Submit
 
-Because SYN-8 has 72 model inputs/step and five more CPU transforms than SYN-3,
-it is strongly recommended to use the smoke-test timing to right-size the full
-walltime before submission. Override, e.g.:
+Smoke test:
 
-  WALLTIME=10:00:00 ./scripts/submit_syn8_wang_full.sh
+```bash
+./scripts/submit_syn.sh syn8 smoke
+```
 
-Output
-------
-  $DATA_DIR/derived/experiments/synthetic_perturb_syn8_v2/
+Full run:
 
-Key files include checkpoint_best.pt, checkpoint_last.pt,
-training_history.csv, validation_history.csv, config.json, run_summary.json,
-and plots/.
+```bash
+./scripts/submit_syn.sh syn8 full
+```
 
-SYN-8 v2 smoothing-only patch
-=============================
+Default output:
 
-Changes from the first SYN-8-v2 bundle:
+```text
+$DATA_DIR/derived/experiments/synthetic_perturb_syn8_v2
+```
 
-1. The training family `smoothing_sharpening` is renamed `smoothing`.
-2. Smoothing is one-sided in training: rank r -> sigma = +0.6*r, so ranks
-   1..10 correspond to sigma 0.6..6.0.
-3. No sharpening examples are generated during SYN-8 training.
-4. The Wang target remains identical: target cosine distance = 0.009*r^2.
-5. The other seven families are unchanged.
-6. Sharpening remains part of the later signed morphology evaluation and is
-   intentionally treated as out-of-sample behavior rather than forced onto a
-   symmetric training curve.
+## Resume
 
-The run names remain synthetic_perturb_syn8_v2[_smoke]. If a previous run was
-started with the old symmetric smoothing/sharpening bundle, do not resume that
-checkpoint into this patched trainer. Use a fresh output directory or remove /
-rename the partial old experiment directory first.
+Both experiments write `checkpoint_best.pt`, `checkpoint_last.pt`, and periodic
+`checkpoint_step*.pt` files. Resume the same deterministic epoch by providing a
+checkpoint explicitly:
 
+```bash
+RUN_NAME=synthetic_perturb_syn3_v2 \
+RESUME_CHECKPOINT="$DATA_DIR/derived/experiments/synthetic_perturb_syn3_v2/checkpoint_last.pt" \
+./scripts/submit_syn.sh syn3 full
+```
+
+The shared implementation preserves the validated final experiment definitions
+and checkpoint metadata from the formerly separate SYN-3 and SYN-8 trainers.

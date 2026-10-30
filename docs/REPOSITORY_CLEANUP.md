@@ -71,7 +71,7 @@ This is the working classification for the reproducibility refactor. It is inten
 | `scripts/plot_full_epoch_history.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/plot_hard_ranking_finetune.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/plot_hard_ranking_v2_full.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
-| `scripts/plot_hard_ranking_v3_full.py` | CANONICAL | Move into a clear data/train/evaluate/plot entry-point group and remove hard-coded paths. |
+| `scripts/plot_nfv_training.py` | CANONICAL | Final NFV training-history plotter; naming cleaned in Patch 2. |
 | `scripts/plot_lead_consistency_experiment.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/plot_morphology_syn3_traditional.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/plot_morphology_syn3_vs_syn8.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
@@ -124,17 +124,17 @@ This is the working classification for the reproducibility refactor. It is inten
 | `scripts/submit_feature_inversion_smoke.sh` | HISTORY | Superseded pilot/smoke path; retain only in snapshot. |
 | `scripts/submit_feature_inversion_smoke_v2.sh` | HISTORY | Superseded pilot/smoke path; retain only in snapshot. |
 | `scripts/submit_final_diagnostics.sh` | SUPPORT | Keep as a secondary utility/method figure; remove hard-coded paths. |
-| `scripts/submit_hard_ranking_v3_full.sh` | CANONICAL | Move into a clear data/train/evaluate/plot entry-point group and remove hard-coded paths. |
+| `scripts/submit_nfv.sh` | CANONICAL | Final NFV submission wrapper; centralized paths and resume override. |
 | `scripts/submit_hrrr_extended_synoptic_preprocessing.sh` | CANONICAL | Move into a clear data/train/evaluate/plot entry-point group and remove hard-coded paths. |
 | `scripts/submit_hrrr_extended_synoptic_smoke.sh` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/submit_hrrr_preprocessing.sh` | CANONICAL | Move into a clear data/train/evaluate/plot entry-point group and remove hard-coded paths. |
 | `scripts/submit_lead_consistency_experiment.sh` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/submit_representation_characterization.sh` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/submit_stage4_download.sh` | CANONICAL | Move into a clear data/train/evaluate/plot entry-point group and remove hard-coded paths. |
-| `scripts/submit_syn3_wang_full.sh` | CANONICAL | Move into a clear data/train/evaluate/plot entry-point group and remove hard-coded paths. |
-| `scripts/submit_syn3_wang_smoke.sh` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
-| `scripts/submit_syn8_wang_full.sh` | CANONICAL | Move into a clear data/train/evaluate/plot entry-point group and remove hard-coded paths. |
-| `scripts/submit_syn8_wang_smoke.sh` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
+| `scripts/submit_syn.sh` | CANONICAL | Shared SYN-3/SYN-8 full/smoke submission wrapper. |
+
+
+
 | `scripts/submit_synthetic_perturbation.sh` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/submit_timelag_experiment.sh` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/submit_v2_external_diagnostics.sh` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
@@ -143,9 +143,9 @@ This is the working classification for the reproducibility refactor. It is inten
 | `scripts/train_groupnorm.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/train_groupnorm_pilot.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/train_hard_ranking_finetune.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
-| `scripts/train_hard_ranking_v3_full.py` | CANONICAL | Rename/clean as NFV trainer; preserve objective. |
-| `scripts/train_syn3_wang_adapted.py` | CANONICAL | Consolidate into shared SYN trainer + SYN-3/SYN-8 configs. |
-| `scripts/train_syn8_wang_adapted.py` | CANONICAL | Consolidate into shared SYN trainer + SYN-3/SYN-8 configs. |
+| `scripts/train_nfv.py` | CANONICAL | Thin CLI for the final NFV training engine. |
+| `scripts/train_syn.py` | CANONICAL | Thin CLI for shared SYN-3/SYN-8 training engine. |
+
 | `scripts/train_synthetic_perturbation.py` | HISTORY | Remove from clean branch after canonical workflow passes smoke tests. |
 | `scripts/validate_hrrr_archive.py` | CANONICAL | Move into a clear data/train/evaluate/plot entry-point group and remove hard-coded paths. |
 | `scripts/validate_hrrr_zarr_vs_grib.py` | SUPPORT | Keep as a secondary utility/method figure; remove hard-coded paths. |
@@ -165,7 +165,7 @@ This is the working classification for the reproducibility refactor. It is inten
 | `slurm/preprocess_hrrr_extended_synoptic_day.slurm` | CANONICAL | Keep functionality, simplify naming, source central environment/config. |
 | `slurm/recompute_final_inches.slurm` | CANONICAL | Keep functionality, simplify naming, source central environment/config. |
 | `slurm/resume_hard_ranking_finetune.slurm` | HISTORY | Remove from clean branch after replacement validation. |
-| `slurm/resume_hard_ranking_v3_full.slurm` | CANONICAL | Keep functionality, simplify naming, source central environment/config. |
+
 | `slurm/run_all_synthetic_diagnostics.slurm` | SUPPORT | Retain only if still useful after final diagnostic wrappers exist. |
 | `slurm/run_bn_batchstat_diagnostic.slurm` | HISTORY | Remove from clean branch after replacement validation. |
 | `slurm/run_bn_recalibration_test.slurm` | HISTORY | Remove from clean branch after replacement validation. |
@@ -205,9 +205,9 @@ This is the working classification for the reproducibility refactor. It is inten
 | `slurm/train_full_epoch.slurm` | HISTORY | Remove from clean branch after replacement validation. |
 | `slurm/train_groupnorm_pilot.slurm` | HISTORY | Remove from clean branch after replacement validation. |
 | `slurm/train_hard_ranking_finetune.slurm` | HISTORY | Remove from clean branch after replacement validation. |
-| `slurm/train_hard_ranking_v3_full.slurm` | CANONICAL | Rename/clean as NFV launcher. |
-| `slurm/train_syn3_wang.slurm` | CANONICAL | Consolidate around the shared SYN trainer. |
-| `slurm/train_syn8_wang.slurm` | CANONICAL | Consolidate around the shared SYN trainer. |
+| `slurm/train_nfv.slurm` | CANONICAL | Final NFV launcher; supports both fresh and resumed runs. |
+| `slurm/train_syn.slurm` | CANONICAL | Shared SYN-3/SYN-8 launcher. |
+
 | `slurm/train_synthetic_perturbation.slurm` | HISTORY | Remove from clean branch after replacement validation. |
 
 ## `src/` guidance
@@ -223,7 +223,7 @@ The core library is comparatively small and should not be aggressively rewritten
 ## Refactor order
 
 1. Foundation: site configuration, environment, documentation, repo hygiene.
-2. Training: shared SYN trainer/configs; rename hard-ranking V3 as NFV without changing science.
+2. Training: **complete in Patch 2** — shared SYN trainer plus NFV naming/launchers without changing science.
 3. Diagnostics: consolidate morphology, Stage IV, forecast-hour, inversion, and TL workflows.
 4. Reproduction front door and URSA smoke tests.
 5. Only then remove `HISTORY` files from the clean branch.
