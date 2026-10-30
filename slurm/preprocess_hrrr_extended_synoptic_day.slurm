@@ -11,9 +11,10 @@
 #SBATCH --error=/dev/null
 
 set -euo pipefail
-PROJECT_DIR="/scratch4/NCEPDEV/ovp/Marcel.Caron/mach_learn/contrastive_learning"
+PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
 DATE_LIST="${1:?Usage: sbatch ... preprocess_hrrr_extended_synoptic_day.slurm DATE_LIST}"
-source "${PROJECT_DIR}/load_env.sh"
+cd "${PROJECT_DIR}"
+source load_env.sh
 export BLOSC_NTHREADS="${SLURM_CPUS_PER_TASK:-4}"
 DAYS_PER_TASK="${DAYS_PER_TASK:-7}"
 

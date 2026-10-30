@@ -12,7 +12,11 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/scratch4/NCEPDEV/ovp/Marcel.Caron/mach_learn/contrastive_learning"
+PROJECT_DIR="${PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
+BOOTSTRAP_LOG_DIR="${LOG_DIR:-${PROJECT_DIR}/logs}"
+mkdir -p "${BOOTSTRAP_LOG_DIR}"
+LOG_FILE="${BOOTSTRAP_LOG_DIR}/stageiv_forecast_hour_build_${SLURM_JOB_ID}.log"
+exec >"${LOG_FILE}" 2>&1
 cd "${PROJECT_DIR}"
 
 # ----------------------------------------------------------------------
@@ -29,12 +33,8 @@ if [[ ! -x "${PROJECT_PYTHON}" ]]; then
 fi
 
 # ----------------------------------------------------------------------
-# 2. Set up logging.
+# 2. Logging was initialized before environment bootstrap.
 # ----------------------------------------------------------------------
-mkdir -p "${LOG_DIR}"
-LOG_FILE="${LOG_DIR}/stageiv_forecast_hour_build_${SLURM_JOB_ID}.log"
-exec >"${LOG_FILE}" 2>&1
-
 echo "Started: $(date)"
 echo "Host: $(hostname)"
 echo "Job ID: ${SLURM_JOB_ID}"
@@ -115,7 +115,7 @@ echo
 # ----------------------------------------------------------------------
 # 5. Build HRRR/Stage-IV patch archive.
 # ----------------------------------------------------------------------
-"${PROJECT_PYTHON}" scripts/build_stageiv_forecast_hour_archive.py \
+"${PROJECT_PYTHON}" scripts/data/build_stageiv_forecast_hour_archive.py \
     --pair-manifest "${PAIR_MANIFEST}" \
     --hrrr-manifest "${HRRR_MANIFEST}" \
     --output-dir "${ARCHIVE_DIR}" \
@@ -135,9 +135,9 @@ echo
 # ----------------------------------------------------------------------
 # 7. Traditional verification metrics.
 # ----------------------------------------------------------------------
-"${PROJECT_PYTHON}" scripts/compute_stageiv_forecast_hour_traditional_metrics.py \
+"${PROJECT_PYTHON}" scripts/evaluate/forecast_hour_traditional.py \
     --archive-dir "${ARCHIVE_DIR}" \
-    --threshold-mm 0.1 \
+    --threshold-mm 2.54 \
     --fss-widths 5 10 \
     --batch-size 32
 
