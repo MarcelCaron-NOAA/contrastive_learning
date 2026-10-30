@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Plot the eight-family morphology diagnostics.
+
+Produces:
+  1. traditional metrics + synthetic learned similarity (95% CI shading)
+  2. V3 vs synthetic learned similarity (clean lines; CI data remain in CSV)
+"""
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+
+FAMILIES = [
+    "displacement",
+    "intensity",
+    "area_size",
+    "smoothing_sharpening",
+    "object_dispersion_cells",
+    "principal_axis_log2_scale",
+    "rotation_deg",
+    "tile_fragmentation_cells",
+]
+
+TITLES = {
+    "displacement": "Displacement biases experiments",
+    "intensity": "Intensity biases experiments",
+    "area_size": "Area size biases experiments",
+    "smoothing_sharpening": "Sharpness vs. smoothing experiments",
+    "object_dispersion_cells": "Object concentration vs. dispersion experiments",
+    "principal_axis_log2_scale": "Principal-axis compression vs. elongation experiments",
+    "rotation_deg": "Rotation biases experiments",
+    "tile_fragmentation_cells": "Tile-fragmentation experiments",
+}
+
+XLABEL = {
+    "displacement": "horizontal displacement (grid cells)",
+    "intensity": "multiplicative intensity factor",
+    "area_size": "area scale factor",
+    "smoothing_sharpening": "sigma (− sharpen, + smooth)",
+    "object_dispersion_cells": "grid cells (− concentrate, + disperse)",
+    "principal_axis_log2_scale": "log2 principal-axis scale",
+    "rotation_deg": "rotation (degrees)",
+    "tile_fragmentation_cells": "tile jitter (grid cells)",
+}
+
+COLORS = {
+    "ets": "forestgreen",
+    "pod": "darkorange",
+    "success_ratio": "mediumseagreen",
+    "fss10": "navy",
+    "fss5": "lightskyblue",
+    "synthetic": "crimson",
+    "v3": "black",
+}
+
+
+def add_metric(ax, g, stem, label, color, *, ci=True, ls="-", lw=1.8):
+    x = g.bias.to_numpy(dtype=float)
+    y = g[f"{stem}_mean"].to_numpy(dtype=float)
+    ax.plot(x, y, color=color, label=label, linestyle=ls, linewidth=lw)
+    lo = f"{stem}_ci95_lo"; hi = f"{stem}_ci95_hi"
+    if ci and lo in g.columns and hi in g.columns:
+        ax.fill_between(x, g[lo].to_numpy(dtype=float), g[hi].to_numpy(dtype=float), color=color, alpha=0.13, linewidth=0)
+
+
+def decorate(ax, family):
+    identity = 1.0 if family in ("intensity", "area_size") else 0.0
+    ax.axvline(identity, color="0.45", lw=0.8, alpha=0.6)
+    ax.set_title(TITLES[family], fontsize=11)
+    ax.set_xlabel(XLABEL[family])
+    ax.set_ylabel("verification score")
+    ax.set_ylim(-0.03, 1.04)
+    ax.grid(alpha=0.22)
+
+
+def plot_traditional(df, outfile, synthetic_label):
+    fig, axes = plt.subplots(4, 2, figsize=(12.0, 16.2))
+    axes = axes.ravel()
+    metrics = [
+        ("ets", "ETS", COLORS["ets"]),
+        ("pod", "POD", COLORS["pod"]),
+        ("success_ratio", "Success Ratio", COLORS["success_ratio"]),
+        ("fss10", "FSS-10", COLORS["fss10"]),
+        ("fss5", "FSS-5", COLORS["fss5"]),
+        ("learned_synthetic", synthetic_label, COLORS["synthetic"]),
+    ]
+    for ax, family in zip(axes, FAMILIES):
+        g = df[df.family == family].sort_values("bias")
+        for stem, label, color in metrics:
+            add_metric(ax, g, stem, label, color, ci=True)
+        # This is the actual target used by the 8-transform synthetic training.
+        ax.plot(g.bias, g.synthetic_target, color="black", linestyle=":", linewidth=1.8, label="synthetic training target")
+        decorate(ax, family)
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, loc="center right", bbox_to_anchor=(1.14, 0.5), frameon=False)
+    fig.suptitle("Controlled precipitation perturbation response", fontsize=15, fontweight="bold", y=0.995)
+    fig.tight_layout(rect=[0, 0, 0.86, 0.985])
+    fig.savefig(outfile, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_learned(df, outfile, synthetic_label, natural_label):
+    fig, axes = plt.subplots(4, 2, figsize=(12.0, 16.2))
+    axes = axes.ravel()
+    for ax, family in zip(axes, FAMILIES):
+        g = df[df.family == family].sort_values("bias")
+        add_metric(ax, g, "learned_v3", natural_label, COLORS["v3"], ci=False, lw=2.0)
+        add_metric(ax, g, "learned_synthetic", synthetic_label, COLORS["synthetic"], ci=False, lw=2.0)
+        ax.plot(g.bias, g.synthetic_target, color="0.35", linestyle=":", linewidth=1.5, label="synthetic training target")
+        decorate(ax, family)
+        ax.set_ylabel("learned cosine similarity")
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, loc="center right", bbox_to_anchor=(1.14, 0.5), frameon=False)
+    fig.suptitle("Learned similarity response to controlled precipitation perturbations", fontsize=15, fontweight="bold", y=0.995)
+    fig.tight_layout(rect=[0, 0, 0.86, 0.985])
+    fig.savefig(outfile, dpi=220, bbox_inches="tight")
+    plt.close(fig)
+
+
+def main():
+    data = Path(os.environ["DATA_DIR"])
+    default_dir = data / "derived/experiments/synthetic_perturb_all8_v1/evaluation/morphology_vs_v3"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--evaluation-dir", default=str(default_dir))
+    ap.add_argument("--synthetic-label", default="SYN-8")
+    ap.add_argument("--natural-label", default="NFV (V3)")
+    args = ap.parse_args()
+
+    ev = Path(args.evaluation_dir)
+    df = pd.read_csv(ev / "morphology_summary.csv")
+    missing = [f for f in FAMILIES if f not in set(df.family)]
+    if missing:
+        raise RuntimeError(f"Missing morphology families: {missing}")
+
+    out1 = ev / "morphology_traditional_plus_synthetic.png"
+    out2 = ev / "morphology_v3_vs_synthetic.png"
+    plot_traditional(df, out1, args.synthetic_label)
+    plot_learned(df, out2, args.synthetic_label, args.natural_label)
+    print(out1)
+    print(out2)
+
+
+if __name__ == "__main__":
+    main()
+
