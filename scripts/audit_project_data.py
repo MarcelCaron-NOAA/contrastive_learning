@@ -26,8 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-DEFAULT_PROJECT_DIR = Path("/scratch4/NCEPDEV/ovp/Marcel.Caron/mach_learn/contrastive_learning")
-DEFAULT_WORK_DIR = Path("/scratch4/NCEPDEV/stmp/Marcel.Caron/mach_learn/contrastive_learning")
+DEFAULT_PROJECT_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_WORK_DIR = DEFAULT_PROJECT_DIR
 
 IMPORTANT_TOPLEVEL_NAMES = {
     "processed", "preprocessed", "prepared", "derived",

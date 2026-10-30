@@ -28,9 +28,6 @@ MAX_CONCURRENT=1 ./scripts/submit_hrrr_preprocessing.sh 20210105 20210105
 Then benchmark training-like random reads:
 
 ```bash
-python scripts/benchmark_hrrr_store.py \
-  "$DATA_DIR/forecasts/hrrr/qpf6_native/daily/2021/202101/hrrr_qpf6_20210105.zarr.zip" \
-  --reads 200
 ```
 
 Do not launch the multi-year archive until this one-day test confirms acceptable runtime, file size, and random-patch read performance.
@@ -50,4 +47,3 @@ python scripts/build_hrrr_manifest.py
 ```
 
 Train/validation/test assignments are intentionally not baked into the canonical data. They can be created later from the manifest with whatever chronological split and gap we ultimately choose.
-

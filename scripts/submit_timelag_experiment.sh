@@ -67,5 +67,5 @@ export SAMPLE_PLAN_FROM MAPPING STAGE4_ROOT MANIFEST
 
 sbatch \
   --array="0-$((N_SHARDS - 1))%${MAX_CONCURRENT}" \
-  "$(dirname "$0")/../slurm/timelag_experiment.slurm"
+  "$(dirname "$0")/../slurm/evaluate_timelag.slurm"
 

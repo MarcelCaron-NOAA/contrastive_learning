@@ -64,6 +64,21 @@ snapshot. The 1,000-case processed evaluation arrays and their case metadata are
 preserved under `derived/evaluation/stageiv_reference_v1/`. Raw Stage IV inputs
 can be reacquired when needed.
 
+## Rebuilding the processed Stage IV reference archive
+
+The frozen project-support archive already contains the validated 1,000-case
+Stage-IV reference dataset. If it must be rebuilt from raw Stage IV files, use:
+
+```bash
+export STAGEIV_ROOT=/path/to/stage4/6h/files
+export HRRR_GRID_TEMPLATE=/path/to/a/native/hrrr/grid/file
+sbatch slurm/run_stageiv_reference_build.slurm
+```
+
+This rebuilds the case manifest and the HRRR/Stage-IV 256x256 arrays under
+`$DATA_DIR/derived/evaluation/stageiv_reference_v1/`. Raw Stage IV is treated as
+reacquirable source data rather than a permanent repository asset.
+
 ## Restoring data
 
 Restore only the years/products required for the experiment you intend to run.

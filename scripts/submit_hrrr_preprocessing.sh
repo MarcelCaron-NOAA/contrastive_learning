@@ -2,7 +2,7 @@
 set -euo pipefail
 [[ $# -eq 2 ]] || { echo "Usage: $0 START_YYYYMMDD END_YYYYMMDD" >&2; exit 2; }
 START="$1"; END="$2"
-PROJECT_DIR="${PROJECT_DIR:-/scratch4/NCEPDEV/ovp/Marcel.Caron/mach_learn/contrastive_learning}"
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 source "${PROJECT_DIR}/load_env.sh"
 MAX_CONCURRENT="${MAX_CONCURRENT:-12}"
 DATE_LIST="${DATA_DIR}/metadata/date_lists/hrrr_${START}_${END}.txt"

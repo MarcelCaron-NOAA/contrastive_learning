@@ -16,7 +16,7 @@ kept out of tracked code.
 
 ## What this repository reproduces
 
-The cleaned workflow is being organized around four primary diagnostic suites:
+The cleaned workflow is organized around four primary result/interpretability diagnostic suites:
 
 1. **Controlled morphology response** — learned similarity and traditional
    metrics as precipitation structure is perturbed.
@@ -104,16 +104,16 @@ Training has now been consolidated to three clear model entry points:
 
 Use `smoke` instead of `full` for a short SYN test.  The canonical evaluation
 entry points are listed in [`docs/REPRODUCING_RESULTS.md`](docs/REPRODUCING_RESULTS.md).
-A final top-level reproduction driver will be added after the diagnostics are
-consolidated.
+Canonical diagnostics can now be submitted with `scripts/submit_diagnostic.sh`;
+a final end-to-end reproduction driver is added in the next cleanup stage.
 
 ## Repository layout
 
 ```text
 configs/       Experiment/evaluation configuration tracked by Git
 docs/          Methods, data, diagnostics, and reproduction notes
-scripts/       Executable research workflows (being consolidated)
-slurm/         URSA Slurm launchers (being consolidated)
+scripts/       Training plus data/evaluate/plot workflow entry points
+slurm/         URSA Slurm launchers for canonical workflows
 src/data/      HRRR archive readers, preprocessing, and sampling
 src/eval/      Controlled transforms and traditional verification metrics
 src/models/    GroupNorm precipitation encoders and checkpoint loading
