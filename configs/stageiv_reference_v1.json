@@ -1,0 +1,45 @@
+{
+  "split": "validation",
+  "forecast_hours": [
+    7,
+    17
+  ],
+  "valid_end_hours_utc": [
+    0,
+    6,
+    12,
+    18
+  ],
+  "accumulation_hours": 6,
+  "candidate_count": 3000,
+  "target_case_count": 1000,
+  "patch_size": 256,
+  "primary_stageiv_regrid": "BUDGET",
+  "regrid_sensitivity": "BILIN",
+  "regrid_width": 2,
+  "model_checkpoint": "groupnorm_pilot_v1/checkpoint_best.pt (step 43500)",
+  "model_input_normalization": "same HRRR-training log1p_zscore for F and O",
+  "fss_thresholds_mm": [
+    0.1,
+    1.0,
+    5.0,
+    10.0
+  ],
+  "fss_windows_grid_cells": [
+    1,
+    7,
+    15,
+    31
+  ],
+  "representative_fss_for_initial_scatter": {
+    "threshold_mm": 1.0,
+    "window": 15
+  },
+  "sealed_test_set": false,
+  "notes": [
+    "Stage-IV patches require complete finite coverage.",
+    "Do not fill missing Stage-IV data with zero.",
+    "Manual grid-orientation/alignment check is mandatory before inference."
+  ]
+}
+

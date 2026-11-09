@@ -1,8 +1,13 @@
+# Local machine/user configuration
+site_config.sh
+
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.pytest_cache/
+.mypy_cache/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -18,11 +23,16 @@ slurm-*.out
 *.swp
 *.swo
 *~
+*.bak
+*.bak_*
+*.bak*
 
-# Local data / scratch directories, if ever created here
-data/
+# Local data / scratch / generated products
 scratch/
 logs/
+data/
+outputs/
+figures/
 
 # Build / packaging
 build/
