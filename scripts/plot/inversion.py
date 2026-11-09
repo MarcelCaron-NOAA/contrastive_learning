@@ -32,53 +32,146 @@ def make_cmap():
     cmap.set_over(PRECIP_OVER_IN)
     return cmap, BoundaryNorm(PRECIP_LEVELS_IN, cmap.N)
 
-
 def plot_model(outroot: Path, model: str, targets: list[float], original_in: np.ndarray):
     cmap, norm = make_cmap()
     fields = [original_in]
-    metas = [{"target_similarity": 1.0, "achieved_similarity": 1.0, "reached_target_tolerance": True}]
+    metas = [{
+        "target_similarity": 1.0,
+        "achieved_similarity": 1.0,
+        "reached_target_tolerance": True,
+    }]
+
     for t in targets:
         f, m = load_target(outroot / model, t)
         fields.append(f)
         metas.append(m)
 
-    # Original + 8 dense continuation targets = exactly 9 panels.
+    # Original + 8 target similarities = 9 panels.
     n = len(fields)
     ncol = 3 if n == 9 else min(5, n)
     nrow = int(np.ceil(n / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(3.45*ncol, 3.65*nrow), squeeze=False)
+
+    fig, axes = plt.subplots(
+        nrow,
+        ncol,
+        figsize=(3.45 * ncol, 3.65 * nrow),
+        squeeze=False,
+    )
     axes_flat = axes.ravel()
     mesh = None
+
+    # Reserve dedicated space below the panels for the colorbar.
+    fig.subplots_adjust(
+        left=0.035,
+        right=0.995,
+        top=0.915,
+        bottom=0.145,
+        wspace=0.06,
+        hspace=0.16,
+    )
 
     for j, ax in enumerate(axes_flat):
         if j >= n:
             ax.axis("off")
             continue
+
         f, m = fields[j], metas[j]
-        mesh = ax.pcolormesh(f, shading="auto", cmap=cmap, norm=norm)
+
+        mesh = ax.pcolormesh(
+            f,
+            shading="auto",
+            cmap=cmap,
+            norm=norm,
+        )
+
         ax.set_aspect("equal")
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        # Single-line, left/right-aligned panel headings.
         if j == 0:
-            title = "Original\nS = 1.000"
+            left_label = "Original"
+            right_label = "S = 1.000"
         else:
             hit = bool(m.get("reached_target_tolerance", False))
-            marker = "" if hit else "  *"
-            title = (
-                f"Target {m['target_similarity']:+.2f}{marker}\n"
+
+            left_label = (
+                f"Target {m['target_similarity']:+.2f}"
+            )
+
+            right_label = (
                 f"Achieved {m['achieved_similarity']:+.3f}"
             )
-        ax.set_title(title, fontsize=10, fontweight="bold")
+
+            # Mark the achieved value when the optimizer could not
+            # reach the requested target within tolerance.
+            if not hit:
+                right_label += "*"
+
+        ax.text(
+            0.0,
+            1.015,
+            left_label,
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=10,
+            fontweight="bold",
+        )
+
+        ax.text(
+            1.0,
+            1.015,
+            right_label,
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=10,
+            fontweight="bold",
+        )
+
+    # Dedicated colorbar axes: completely below the panel grid.
+    cax = fig.add_axes([0.22, 0.055, 0.56, 0.024])
 
     cbar = fig.colorbar(
-        mesh, ax=axes_flat[:n].tolist(), orientation="horizontal",
-        fraction=0.035, pad=0.035, extend="max"
+        mesh,
+        cax=cax,
+        orientation="horizontal",
+        extend="max",
     )
-    cbar.set_label("6-h precipitation (in)")
-    fig.suptitle(f"{model.upper()} dense feature-space continuation", fontsize=15, fontweight="bold")
-    fig.subplots_adjust(left=0.035, right=0.995, top=0.91, bottom=0.09, wspace=0.04, hspace=0.13)
-    fig.savefig(outroot / f"continuation_gallery_{model}.png", dpi=210, bbox_inches="tight")
-    plt.close(fig)
+    cbar.set_label("6-h precipitation (in)", fontsize=10)
+    cbar.ax.tick_params(labelsize=8)
 
+    # Define the asterisk without cluttering the individual panels.
+    fig.text(
+        0.995,
+        0.105,
+        "* target not reached within tolerance",
+        ha="right",
+        va="bottom",
+        fontsize=8,
+    )
+
+    display_name = {
+        "nfv": "NFV",
+        "syn3": "SYN-3",
+        "syn8": "SYN-8",
+    }.get(model.lower(), model.upper())
+
+    fig.suptitle(
+        f"{display_name} learned-similarity inversion",
+        fontsize=15,
+        fontweight="bold",
+        y=0.985,
+    )
+
+    fig.savefig(
+        outroot / f"continuation_gallery_{model}.png",
+        dpi=210,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
 
 def plot_target_vs_achieved(outroot: Path):
     csv_path = outroot / "continuation_summary.csv"
